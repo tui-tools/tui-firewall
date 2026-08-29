@@ -1,86 +1,170 @@
-# tui-tools
+<img src="assets/logo.png" alt="tui-firewall" width="240">
 
-> **Status: early, under validation.** Independent tools that follow the
-> Omarchy visual style; they are **not** part of the Omarchy project and not
+A terminal UI for the Linux firewall. It shows the rules you actually have, and
+**previews the exact command line of every change before running it**.
+
+`ufw` has no TUI: you get the CLI, or Gufw if you have a desktop. `tui-firewall`
+fills the gap on a server or a tiling desktop, in the
+[Omarchy](https://omarchy.org) visual style.
+
+![Rules table](docs/screenshots/tui-firewall-main.png)
+
+> **Status: early, under validation.** An independent tool that follows the
+> Omarchy visual style; it is **not** part of the Omarchy project and not
 > endorsed by its maintainers. Expect rough edges.
-
-A family of terminal tools for Linux, in the visual style of
-[Omarchy](https://omarchy.org): the same palette, the same key language and the
-same "show me before you do it" behaviour as lazygit, lazydocker and btop.
-
-Every tool is a **single static binary**, works on Debian/Ubuntu and Arch, and
-runs **no daemon**. Nothing is installed in the background, nothing keeps
-running after you quit.
-
-![fwall](docs/screenshots/fwall-main.png)
-
-## Tools
-
-| Tool | What it does | Status |
-| --- | --- | --- |
-| [`fwall`](cmd/fwall/README.md) | Manage the system firewall (ufw today, firewalld planned) | v0.1 |
 
 ## Install
 
-Grab a binary from the releases page, or build it yourself:
+Grab a static binary from the [releases](https://github.com/tui-tools/tui-firewall/releases),
+or build it yourself:
 
 ```sh
-git clone https://github.com/edimarlnx/tui-tools
-cd tui-tools
-make build          # binaries land in ./bin
-sudo install -m0755 bin/fwall /usr/local/bin/fwall
+git clone https://github.com/tui-tools/tui-firewall
+cd tui-firewall
+make build
+sudo install -m0755 bin/tui-firewall /usr/local/bin/tui-firewall
 ```
 
-Try any tool without touching your system:
+One static binary, no daemon, no state of its own. Nothing keeps running after
+you quit.
+
+## Try it without root
 
 ```sh
-make demo           # fwall against an in-memory sample firewall
+tui-firewall --demo
 ```
 
-## Design rules
+`--demo` runs against an in-memory sample firewall. Every key works, every
+command is built and previewed for real, and nothing touches your system.
 
-These hold for every tool in the repo.
+## Every change is previewed
 
-- **Preview, then confirm.** No tool ever changes the system without first
-  showing the exact command line it is about to run. The confirm dialog is the
-  only path to a mutation.
-- **Read-only by default.** Starting a tool only reads state.
-- **No daemon, no state of its own.** The system is the source of truth; the
-  tools re-read it after every change.
-- **Backend-agnostic core.** The UI talks to an interface, never to a specific
-  CLI. That is what lets `fwall` grow a firewalld backend without touching the
-  screens.
-- **Responsive.** Layouts adapt from a 40-column pane to a full screen.
+![Delete confirmation](docs/screenshots/tui-firewall-delete.png)
+
+`y` runs the command shown, `n` does not. There is no other path to a change:
+the UI hands the same value to the preview and to the runner, so what you read
+is what executes.
+
+## Usage
+
+```sh
+tui-firewall                      # drive the real firewall
+tui-firewall --demo               # sample data, no privileges needed
+tui-firewall --backend ufw        # skip autodetection
+tui-firewall --theme ~/mytheme/colors.toml
+tui-firewall --sudo ""            # run the firewall command directly (as root)
+tui-firewall --version
+```
+
+`tui-firewall` needs root to change anything. When it is not running as root it
+uses `sudo -n`, which never prompts: run `sudo -v` in another terminal first, or
+start `tui-firewall` with sudo. If neither `ufw` nor `sudo` is available, it
+says so and points at `--demo`.
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| `↑`/`k`, `↓`/`j` | Move the selection |
+| `g` / `G` | First / last rule |
+| `pgup` / `pgdn` | Scroll a page |
+| `/` | Filter rules (matches any column; `esc` clears) |
+| `a` | Add a rule |
+| `d` | Delete the selected rule |
+| `e` | Enable or disable the firewall |
+| `r` | Reload the firewall |
+| `p` | Change a default policy |
+| `L` | Change the logging level |
+| `[` / `]` | Previous / next group (multi-group backends only) |
+| `R` | Re-read the firewall |
+| `?` | Help |
+| `q` | Quit |
+
+In the **add rule** form: `tab` / `shift+tab` move between fields, `←`/`→`
+cycle a choice, `enter` opens a picker on a choice field and submits from a
+text field, `esc` cancels.
+
+![Add rule form](docs/screenshots/tui-firewall-add.png)
+
+![Default policies](docs/screenshots/tui-firewall-policies.png)
+
+![Help](docs/screenshots/tui-firewall-help.png)
+
+## What v0.1 can do
+
+- Read `ufw status verbose`, `ufw status numbered` and `ufw app list`.
+- Show status, default policies (incoming/outgoing/routed) and logging level.
+- List rules with action, direction, source, destination, ports, protocol,
+  app profile, address family and comment; IPv6 and `route` rules included.
+- Filter rules across every column.
+- Add a rule: action (allow/deny/reject/limit), direction, port or port list or
+  range, protocol, app profile, source and destination CIDR, comment, and
+  insertion at a given position.
+- Delete a rule by number, enable/disable, reload, change a default policy,
+  change the logging level.
+- Follow the active Omarchy theme, and respect `NO_COLOR`.
+
+## What v0.1 cannot do
+
+- **No firewalld yet.** The backend interface is in place and
+  `internal/firewalld` is a documented stub; selecting it reports that clearly.
+- **No rule editing.** Change a rule by deleting it and adding the new one.
+- **No interface qualifiers** (`ufw allow in on eth0 …`): they are parsed and
+  displayed, but the form cannot create them.
+- **No `ufw` application profile management** (only using existing profiles).
+- **No live log tail**, no packet counters, no nft view.
+- Rules are ordered by ufw's own numbering; there is no reordering key.
+
+## Configuration
+
+`/etc/tui-firewall/config.toml`, then `~/.config/tui-firewall/config.toml` (the
+user file overrides the machine-wide one), then `TUI_FIREWALL_*` in the
+environment. Flags override everything. See
+[`examples/config.toml`](examples/config.toml).
+
+```toml
+# Which firewall to drive: "auto", "ufw" or "firewalld".
+backend = "auto"
+
+# Privilege escalation prefix; "" runs the command directly.
+sudo = "sudo -n"
+
+# Path to an Omarchy-style colors.toml; empty follows the active theme.
+theme = ""
+```
+
+With `backend = "auto"`, tui-firewall prefers an installed backend whose system
+service is running, falls back to the first installed one, and otherwise exits
+with a message naming what to install.
 
 ## Theme
 
-Every tool draws from `pkg/theme`, so they all look alike.
+The default palette is **Tokyo Night**. On Omarchy, the tool reads the active
+desktop theme from `~/.config/omarchy/current/theme/colors.toml` and follows it.
+`TUI_THEME` or `--theme` override; `NO_COLOR` drops color and keeps layout. The
+rules live in [tui-kit](https://github.com/tui-tools/tui-kit#theme-rules).
 
-The default palette is **Tokyo Night**. If you run Omarchy, the tools read the
-active desktop theme from `~/.config/omarchy/current/theme/colors.toml` and
-follow it, so switching your desktop theme switches the tools too. Any
-Omarchy-format `colors.toml` works.
+## Architecture
 
-Precedence:
-
-1. `TUI_THEME=/path/to/colors.toml` (or a tool's `--theme` flag);
-2. the active Omarchy theme, when that file exists;
-3. the built-in Tokyo Night palette.
-
-`NO_COLOR=1` is respected: layout, borders and emphasis stay, colors go away.
-
-## Repository layout
+The UI never builds a `ufw` command line. It talks to
+`internal/firewall.Backend`, which returns a backend-neutral model:
 
 ```
-cmd/<tool>/       one directory per binary
-internal/         backends and domain logic, not importable from outside
-pkg/theme/        shared palette and Lip Gloss styles
-pkg/ui/           shared widgets: header, table, help bar, dialogs, status line
-examples/         sample configuration files
+Model{Enabled, Logging, Groups []Group}
+Group{Name, Default policies, PolicySlots, Rules []Rule}
+Rule{Action, Direction, Proto, Ports, From, To, Service, Comment, Family, Raw, Extra}
 ```
 
-`pkg/` is the shared surface: a new tool imports `pkg/theme` and `pkg/ui` and
-inherits the whole look and key language for free.
+ufw exposes a single group (`rules`) carrying the global in/out/routed
+policies; the group selector stays hidden when there is only one. firewalld
+will expose one group per zone, with the zone target as its policy — the
+mapping is documented at the top of `internal/firewalld/firewalld.go`.
+
+Mutations are `runner.Command` values produced by the backend. The UI shows
+them and, on confirmation, hands them back to the
+[kit runner](https://github.com/tui-tools/tui-kit#the-contract-preview-confirm-run),
+which resolves the binary and the privilege prefix. That is the whole trust
+boundary, and it is why the preview is guaranteed to match what executes.
 
 ## Development
 
@@ -89,24 +173,31 @@ make check        # gofmt, go vet and the tests: what CI runs
 make test
 make build
 make demo
+make screenshots  # re-render the frames above from --demo
 ```
 
-Dependencies are kept deliberately small: Bubble Tea, Bubbles and Lip Gloss,
-nothing else. Configuration and theme files are parsed with a small purpose-made
-reader rather than a TOML library.
+Dependencies are deliberately small: Bubble Tea, Bubbles and
+[tui-kit](https://github.com/tui-tools/tui-kit), which carries the palette, the
+widgets, the config loader and the command runner shared by the whole family.
 
-## Releases
+## Prior art
 
-Each tool is released on its own tag, prefixed with the tool name:
+[The-Robin-Hood/ufWall](https://github.com/The-Robin-Hood/ufWall) is an earlier
+Go + Bubble Tea TUI for ufw (MIT, early-stage, inactive since March 2026);
+`tui-firewall` is an independent implementation with its own parsers and a
+backend-agnostic core aimed at covering firewalld as well.
 
-```sh
-git tag fwall/v0.1.0
-git push origin fwall/v0.1.0
-```
+## Safety notes
 
-GoReleaser builds static `linux/amd64` and `linux/arm64` binaries
-(`CGO_ENABLED=0`) for that tool only.
+- Enabling the firewall over SSH can lock you out. `tui-firewall` warns before
+  confirming, but **add a rule for your SSH port first**.
+- `ufw enable` and `ufw delete` are run with `--force`, because ufw's own
+  interactive prompt cannot be answered from inside a TUI. The confirm dialog
+  replaces it.
+- `tui-firewall` re-reads the firewall after every change, so what you see is
+  what the system reports, not what the tool assumed.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Part of the
+[tui-tools](https://github.com/tui-tools) family.

@@ -1,9 +1,12 @@
+# Generated from tui-kit/templates/ci.yml. It runs the same checks
+# `make check` runs locally, cross-compiles for both release targets, and on a
+# `v*` tag lets GoReleaser publish the binaries.
 name: CI
 
 on:
   push:
     branches: [main]
-    tags: ["*/v*"]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -37,13 +40,8 @@ jobs:
       - name: go test
         run: go test -race ./...
 
-      - name: build every tool
-        run: |
-          for cmd in cmd/*/; do
-            name=$(basename "$cmd")
-            echo "building $name"
-            CGO_ENABLED=0 go build -trimpath -o "/tmp/$name" "./$cmd"
-          done
+      - name: build
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/tui-firewall ./cmd/tui-firewall
 
       - name: verify go.mod is tidy
         run: |
@@ -69,8 +67,28 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-        run: |
-          for cmd in cmd/*/; do
-            name=$(basename "$cmd")
-            go build -trimpath -o "/tmp/${name}_${GOARCH}" "./$cmd"
-          done
+        run: go build -trimpath -o "/tmp/tui-firewall_${GOARCH}" ./cmd/tui-firewall
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, cross-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

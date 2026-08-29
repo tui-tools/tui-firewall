@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/edimarlnx/tui-tools/internal/firewall"
-	"github.com/edimarlnx/tui-tools/pkg/ui"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/ui"
 )
 
 // Layout constants: the rows the table cannot use.
@@ -36,7 +36,7 @@ func (a *app) View() string {
 	case modeForm:
 		return a.form.view(a.theme, a.width, a.height)
 	case modeHelp:
-		return placeCenter(ui.HelpScreen(a.theme, "fwall — keys", helpKeys(), a.width),
+		return placeCenter(ui.HelpScreen(a.theme, "tui-firewall — keys", helpKeys(), a.width),
 			a.width, a.height)
 	}
 	return body
@@ -104,7 +104,7 @@ func (a *app) headerView() string {
 		subtitle += "  ·  filter: " + a.filter
 	}
 
-	return ui.Header{Title: "fwall", Subtitle: subtitle, Facts: facts}.
+	return ui.Header{Title: "tui-firewall", Subtitle: subtitle, Facts: facts}.
 		Render(t, a.width)
 }
 

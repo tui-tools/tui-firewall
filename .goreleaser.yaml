@@ -1,28 +1,24 @@
-# GoReleaser configuration for the tui-tools monorepo.
+# GoReleaser configuration for tui-firewall.
 #
-# Each tool is released on its own tag, prefixed with the tool name:
+# One repository, one binary, one tag series:
 #
-#   git tag fwall/v0.1.0 && git push origin fwall/v0.1.0
+#   git tag v0.1.0 && git push origin v0.1.0
 #
-# `monorepo.tag_prefix` makes GoReleaser treat "fwall/" tags as releases of the
-# fwall tool only, so a new version of one tool never re-releases the others.
-# Add a second stanza (and a matching `builds` entry) when a new tool lands.
+# CI runs `goreleaser release` on a v* tag and attaches static linux/amd64 and
+# linux/arm64 archives to the GitHub release. Generated from the template in
+# tui-kit/templates/.goreleaser.yaml.
 version: 2
 
-project_name: fwall
-
-monorepo:
-  tag_prefix: fwall/
-  dir: .
+project_name: tui-firewall
 
 before:
   hooks:
     - go mod download
 
 builds:
-  - id: fwall
-    main: ./cmd/fwall
-    binary: fwall
+  - id: tui-firewall
+    main: ./cmd/tui-firewall
+    binary: tui-firewall
     env:
       # Static binaries: no libc dependency, one file to copy anywhere.
       - CGO_ENABLED=0
@@ -37,9 +33,9 @@ builds:
       - -s -w -X main.version={{ .Version }}
 
 archives:
-  - id: fwall
+  - id: tui-firewall
     ids:
-      - fwall
+      - tui-firewall
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
@@ -47,8 +43,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - src: cmd/fwall/README.md
-        dst: README.fwall.md
+      - examples/config.toml
 
 checksum:
   name_template: checksums.txt

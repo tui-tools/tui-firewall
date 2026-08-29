@@ -1,18 +1,24 @@
-# fwall configuration.
+# tui-firewall configuration.
 #
-# Read from /etc/fwall/config.toml first, then ~/.config/fwall/config.toml,
-# with the user file overriding the machine-wide one. Command line flags win
-# over both.
+# Read from /etc/tui-firewall/config.toml first, then
+# ~/.config/tui-firewall/config.toml, with the user file overriding the
+# machine-wide one. TUI_FIREWALL_* environment variables override both, and
+# command line flags override everything.
 
 # Which firewall to drive: "auto", "ufw" or "firewalld".
 # "auto" prefers an installed backend whose service is running.
 backend = "auto"
 
-# Privilege escalation prefix used when fwall is not running as root.
-# "sudo -n" never prompts: run `sudo -v` first, or start fwall with sudo.
+# Privilege escalation prefix used when tui-firewall is not running as root.
+# "sudo -n" never prompts: run `sudo -v` first, or start tui-firewall with sudo.
 # Set to "" to run the firewall command directly.
 sudo = "sudo -n"
 
 # Path to an Omarchy-style colors.toml. Empty follows the active Omarchy
 # theme when present, and falls back to the built-in Tokyo Night palette.
 theme = ""
+
+# Every key can also be set in the environment, upper-cased and prefixed:
+#   TUI_FIREWALL_BACKEND=ufw
+#   TUI_FIREWALL_SUDO="doas"
+#   TUI_FIREWALL_THEME=~/themes/gruvbox/colors.toml

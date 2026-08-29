@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // The `ufw logging` levels.
@@ -155,7 +155,7 @@ func BuildDeleteRule(group string, rule firewall.Rule) (firewall.Command, error)
 }
 
 // BuildSetEnabled turns the firewall on or off. `--force` skips ufw's own SSH
-// prompt, which a TUI cannot answer; fwall asks for confirmation itself.
+// prompt, which a TUI cannot answer; tui-firewall asks for confirmation itself.
 func BuildSetEnabled(enabled bool) (firewall.Command, error) {
 	if enabled {
 		return firewall.Command{

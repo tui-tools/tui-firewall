@@ -7,11 +7,26 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/edimarlnx/tui-tools/internal/config"
-	"github.com/edimarlnx/tui-tools/internal/firewall"
-	"github.com/edimarlnx/tui-tools/internal/firewalld"
-	"github.com/edimarlnx/tui-tools/internal/ufw"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewalld"
+	"github.com/tui-tools/tui-firewall/internal/ufw"
+	"github.com/tui-tools/tui-kit/config"
 )
+
+// KeyBackend is the configuration key naming the firewall to drive. It lives
+// here rather than in the kit: which backends exist is tui-firewall's own
+// business, not something every tool in the family shares.
+const KeyBackend = "backend"
+
+// The values KeyBackend accepts.
+const (
+	BackendAuto      = "auto"
+	BackendUFW       = "ufw"
+	BackendFirewalld = "firewalld"
+)
+
+// Names lists every accepted value, for config validation and the flag help.
+func Names() []string { return []string{BackendAuto, BackendUFW, BackendFirewalld} }
 
 // Probe reports what a candidate backend looks like on this host. It is a
 // field so tests can substitute a fake detector.
@@ -25,18 +40,18 @@ type Probe struct {
 // probes maps a backend name to its detector. Package-level so tests can
 // replace entries.
 var probes = map[string]Probe{
-	config.BackendUFW: {
+	BackendUFW: {
 		Installed: ufw.Available,
 		Active:    func() bool { return serviceActive("ufw") },
 	},
-	config.BackendFirewalld: {
+	BackendFirewalld: {
 		Installed: firewalld.Available,
 		Active:    func() bool { return serviceActive("firewalld") },
 	},
 }
 
 // preference is the order `auto` considers backends when none is active.
-var preference = []string{config.BackendUFW, config.BackendFirewalld}
+var preference = []string{BackendUFW, BackendFirewalld}
 
 // serviceActive asks systemd whether a unit is running. A host without
 // systemd simply reports false, which only affects tie-breaking.
@@ -56,15 +71,15 @@ func serviceActive(unit string) bool {
 // installed backend whose service is active, then the first installed one, and
 // fails with an actionable message when the host has neither.
 func Select(cfg config.Config) (firewall.Backend, error) {
-	switch cfg.Backend {
-	case config.BackendUFW:
+	switch cfg.String(KeyBackend, BackendAuto) {
+	case BackendUFW:
 		return ufw.NewReal(cfg.SudoPrefix())
-	case config.BackendFirewalld:
+	case BackendFirewalld:
 		return firewalld.New(), nil
-	case config.BackendAuto:
+	case BackendAuto:
 		return selectAuto(cfg)
 	default:
-		return nil, fmt.Errorf("unknown backend %q", cfg.Backend)
+		return nil, fmt.Errorf("unknown backend %q", cfg.String(KeyBackend, ""))
 	}
 }
 
@@ -89,12 +104,12 @@ func selectAuto(cfg config.Config) (firewall.Backend, error) {
 	return nil, fmt.Errorf(
 		"no supported firewall found; install ufw " +
 			"(apt install ufw / pacman -S ufw), pick one with `backend = \"...\"` " +
-			"in ~/.config/fwall/config.toml, or run with --demo")
+			"in ~/.config/tui-firewall/config.toml, or run with --demo")
 }
 
 // build instantiates the named backend.
 func build(name string, cfg config.Config) (firewall.Backend, error) {
-	if name == config.BackendFirewalld {
+	if name == BackendFirewalld {
 		return firewalld.New(), nil
 	}
 	return ufw.NewReal(cfg.SudoPrefix())

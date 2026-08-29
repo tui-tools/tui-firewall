@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edimarlnx/tui-tools/internal/config"
+	"github.com/tui-tools/tui-kit/config"
 )
 
 // stubProbes replaces the host detectors for the duration of a test.
@@ -13,11 +13,11 @@ func stubProbes(t *testing.T, ufwInstalled, ufwActive, fwdInstalled, fwdActive b
 	original := probes
 	t.Cleanup(func() { probes = original })
 	probes = map[string]Probe{
-		config.BackendUFW: {
+		BackendUFW: {
 			Installed: func() bool { return ufwInstalled },
 			Active:    func() bool { return ufwActive },
 		},
-		config.BackendFirewalld: {
+		BackendFirewalld: {
 			Installed: func() bool { return fwdInstalled },
 			Active:    func() bool { return fwdActive },
 		},
@@ -29,11 +29,11 @@ func TestSelectAutoPrefersTheActiveBackend(t *testing.T) {
 	// one wins even though ufw comes first in the preference order.
 	stubProbes(t, true, false, true, true)
 
-	backend, err := Select(config.Config{Backend: config.BackendAuto})
+	backend, err := Select(config.Config{Values: map[string]string{KeyBackend: BackendAuto}})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if backend.Name() != config.BackendFirewalld {
+	if backend.Name() != BackendFirewalld {
 		t.Errorf("Name = %q, want firewalld", backend.Name())
 	}
 }
@@ -43,11 +43,11 @@ func TestSelectAutoFallsBackToInstalled(t *testing.T) {
 	// look at it and enable it.
 	stubProbes(t, false, false, true, false)
 
-	backend, err := Select(config.Config{Backend: config.BackendAuto})
+	backend, err := Select(config.Config{Values: map[string]string{KeyBackend: BackendAuto}})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if backend.Name() != config.BackendFirewalld {
+	if backend.Name() != BackendFirewalld {
 		t.Errorf("Name = %q, want firewalld", backend.Name())
 	}
 }
@@ -55,7 +55,7 @@ func TestSelectAutoFallsBackToInstalled(t *testing.T) {
 func TestSelectAutoWithoutAnyFirewall(t *testing.T) {
 	stubProbes(t, false, false, false, false)
 
-	_, err := Select(config.Config{Backend: config.BackendAuto})
+	_, err := Select(config.Config{Values: map[string]string{KeyBackend: BackendAuto}})
 	if err == nil {
 		t.Fatal("expected an error when no firewall is installed")
 	}
@@ -71,11 +71,11 @@ func TestSelectExplicitFirewalld(t *testing.T) {
 
 	// An explicit choice is honoured even when the backend is not installed:
 	// the stub reports its own clear error on first use.
-	backend, err := Select(config.Config{Backend: config.BackendFirewalld})
+	backend, err := Select(config.Config{Values: map[string]string{KeyBackend: BackendFirewalld}})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if backend.Name() != config.BackendFirewalld {
+	if backend.Name() != BackendFirewalld {
 		t.Errorf("Name = %q, want firewalld", backend.Name())
 	}
 	if _, err := backend.BuildReload(); err == nil {
@@ -84,7 +84,7 @@ func TestSelectExplicitFirewalld(t *testing.T) {
 }
 
 func TestSelectUnknownBackend(t *testing.T) {
-	if _, err := Select(config.Config{Backend: "iptables"}); err == nil {
+	if _, err := Select(config.Config{Values: map[string]string{KeyBackend: "iptables"}}); err == nil {
 		t.Error("expected an error for an unknown backend")
 	}
 }

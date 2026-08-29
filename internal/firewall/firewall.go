@@ -1,4 +1,4 @@
-// Package firewall defines the backend-agnostic model fwall renders and the
+// Package firewall defines the backend-agnostic model tui-firewall renders and the
 // interface every firewall implementation satisfies. The UI knows only these
 // types: it never builds a ufw or firewall-cmd argv itself. Mutations are
 // Command values produced by the backend, shown in a preview dialog and only
@@ -8,6 +8,8 @@ package firewall
 import (
 	"context"
 	"strings"
+
+	"github.com/tui-tools/tui-kit/runner"
 )
 
 // Action is the verdict a rule applies to matching traffic.
@@ -141,7 +143,7 @@ func (g Group) Label() string {
 	return g.Name
 }
 
-// Model is the whole picture fwall renders.
+// Model is the whole picture tui-firewall renders.
 type Model struct {
 	// Backend names the implementation that produced this model.
 	Backend string
@@ -167,16 +169,13 @@ func (m Model) Group(name string) (Group, bool) {
 
 // Command is a single privileged invocation the user is about to run. Argv
 // excludes any privilege wrapper: the backend adds it when executing.
-type Command struct {
-	Argv        []string
-	Description string
-	// Destructive marks commands that can lock the user out or drop rules, so
-	// the confirm dialog can be painted in the danger color.
-	Destructive bool
-}
-
-// String renders the command the way the user sees it in the preview dialog.
-func (c Command) String() string { return strings.Join(c.Argv, " ") }
+//
+// It is an alias rather than a type of its own: the preview/confirm/run
+// contract belongs to the whole tui-tools family and lives in the kit, and an
+// alias means a backend can hand its Command straight to a runner.Runner with
+// no conversion in between — which is precisely what guarantees that the
+// command shown in the dialog is the command that executes.
+type Command = runner.Command
 
 // RuleSpec describes a rule the user wants to create. Backends translate it
 // into their own syntax; unsupported fields are rejected with a clear error.

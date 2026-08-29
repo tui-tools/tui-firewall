@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // Fake is an in-memory backend used by --demo and by the tests. It applies the

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // Both implementations must satisfy the generic interface.

@@ -6,9 +6,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/edimarlnx/tui-tools/internal/firewall"
-	"github.com/edimarlnx/tui-tools/internal/ufw"
-	"github.com/edimarlnx/tui-tools/pkg/theme"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/ufw"
+	"github.com/tui-tools/tui-kit/theme"
 )
 
 // newTestApp builds the demo app at a fixed size, with colors disabled so
@@ -82,7 +82,7 @@ func TestDemoRendersFirstFrame(t *testing.T) {
 	out := a.View()
 
 	for _, want := range []string{
-		"fwall", "demo", "enabled", "incoming", "logging",
+		"tui-firewall", "demo", "enabled", "incoming", "logging",
 		"ACTION", "22/tcp", "Nginx Full", "10.0.0.0/8",
 	} {
 		if !strings.Contains(out, want) {

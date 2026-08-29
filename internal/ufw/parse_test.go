@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // Real-world `ufw status verbose` output from a Debian host.

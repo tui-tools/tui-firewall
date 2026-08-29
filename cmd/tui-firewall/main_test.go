@@ -4,8 +4,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/edimarlnx/tui-tools/internal/config"
+	"github.com/tui-tools/tui-firewall/internal/backends"
+	"github.com/tui-tools/tui-kit/config"
 )
+
+// baseConfig is the configuration as it stands before the flags are folded in.
+func baseConfig() config.Config {
+	return config.Config{Tool: toolName, Values: defaults()}
+}
 
 func TestParseFlags(t *testing.T) {
 	devNull, err := os.Open(os.DevNull)
@@ -27,29 +33,42 @@ func TestParseFlags(t *testing.T) {
 }
 
 func TestApplyOverrides(t *testing.T) {
-	cfg := config.Default()
+	cfg := baseConfig()
 	applyOverrides(&cfg, options{backend: "firewalld", themePath: "/t/colors.toml"})
-	if cfg.Backend != config.BackendFirewalld || cfg.Theme != "/t/colors.toml" {
-		t.Errorf("cfg = %+v", cfg)
+	if got := cfg.String(backends.KeyBackend, ""); got != backends.BackendFirewalld {
+		t.Errorf("backend = %q, want firewalld", got)
+	}
+	if got := cfg.Theme(); got != "/t/colors.toml" {
+		t.Errorf("Theme() = %q", got)
 	}
 	// An untouched -sudo must not clear the configured prefix.
-	if cfg.Sudo != "sudo -n" {
-		t.Errorf("Sudo = %q, want the config value", cfg.Sudo)
+	if got := cfg.String(config.KeySudo, ""); got != "sudo -n" {
+		t.Errorf("sudo = %q, want the config value", got)
 	}
 
 	// An explicit empty -sudo disables escalation.
-	cfg = config.Default()
+	cfg = baseConfig()
 	applyOverrides(&cfg, options{sudoSet: true, sudo: ""})
-	if cfg.Sudo != "" {
-		t.Errorf("Sudo = %q, want empty", cfg.Sudo)
+	if got := cfg.String(config.KeySudo, "unset"); got != "" {
+		t.Errorf("sudo = %q, want empty", got)
 	}
 	if got := cfg.SudoPrefix(); got != nil {
 		t.Errorf("SudoPrefix = %q, want nil", got)
 	}
 }
 
+func TestDefaultsCoverEveryFlag(t *testing.T) {
+	// Every key a flag can override must be declared, otherwise the
+	// environment layer silently skips it.
+	for _, key := range []string{backends.KeyBackend, config.KeySudo, config.KeyTheme} {
+		if _, ok := defaults()[key]; !ok {
+			t.Errorf("defaults() is missing %q", key)
+		}
+	}
+}
+
 func TestPickBackendDemo(t *testing.T) {
-	backend, err := pickBackend(config.Default(), options{demo: true})
+	backend, err := pickBackend(baseConfig(), options{demo: true})
 	if err != nil {
 		t.Fatalf("pickBackend: %v", err)
 	}

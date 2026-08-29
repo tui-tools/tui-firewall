@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // GroupName is the single group ufw exposes; it carries the global default

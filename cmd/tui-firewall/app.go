@@ -7,9 +7,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/edimarlnx/tui-tools/internal/firewall"
-	"github.com/edimarlnx/tui-tools/pkg/theme"
-	"github.com/edimarlnx/tui-tools/pkg/ui"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/theme"
+	"github.com/tui-tools/tui-kit/ui"
 )
 
 // mode is the screen the app currently shows. Only one dialog is open at a
@@ -37,7 +37,7 @@ const (
 	pickerGroup
 )
 
-// app is the fwall Bubble Tea model.
+// app is the tui-firewall Bubble Tea model.
 type app struct {
 	backend firewall.Backend
 	theme   theme.Theme

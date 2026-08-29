@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/edimarlnx/tui-tools/internal/firewall"
-	"github.com/edimarlnx/tui-tools/pkg/theme"
-	"github.com/edimarlnx/tui-tools/pkg/ui"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/theme"
+	"github.com/tui-tools/tui-kit/ui"
 )
 
 // noneOption is the "leave empty" entry of every optional choice field.

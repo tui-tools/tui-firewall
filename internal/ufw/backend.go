@@ -2,177 +2,79 @@ package ufw
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/runner"
 )
 
 // ErrNotAvailable reports that the ufw backend cannot be used on this machine
 // (ufw missing, or no non-interactive privilege escalation).
-var ErrNotAvailable = errors.New("ufw backend not available")
+var ErrNotAvailable = runner.ErrNotAvailable
 
-// defaultTimeout bounds every ufw invocation so a stuck command cannot freeze
-// the UI.
-const defaultTimeout = 15 * time.Second
+// searchPaths are the sbin locations a non-root PATH commonly omits.
+var searchPaths = []string{"/usr/sbin/ufw", "/sbin/ufw", "/usr/local/sbin/ufw"}
+
+// installHint is appended to the "not found" error.
+const installHint = "install it (apt install ufw / pacman -S ufw), " +
+	"or use --demo to explore the UI"
 
 // Real drives the ufw binary on the host. It satisfies firewall.Backend.
+//
+// Everything about actually reaching the machine — resolving the binary,
+// applying the privilege prefix, bounding each call, turning a failure into
+// one readable line — belongs to the kit runner. What is left here is the
+// translation between ufw's output and the backend-agnostic model.
 type Real struct {
-	// Bin is the resolved ufw executable.
-	Bin string
-	// Privilege is the escalation prefix ("sudo", "-n"); empty when running
-	// as root or when escalation is disabled.
-	Privilege []string
-	// Timeout bounds each invocation; defaults to defaultTimeout.
-	Timeout time.Duration
+	run *runner.Runner
 }
 
 // Available reports whether ufw is installed on this host.
-func Available() bool {
-	_, err := lookUfw()
-	return err == nil
-}
+func Available() bool { return runner.Available("ufw", searchPaths...) }
 
 // NewReal locates ufw and, when not running as root, validates the configured
-// privilege prefix. sudoPrefix comes from the config file ("sudo -n"); pass
+// privilege prefix. sudoPrefix comes from the configuration ("sudo -n"); pass
 // nil to run ufw directly. Errors wrap ErrNotAvailable and carry a message
 // meant to be shown verbatim.
 func NewReal(sudoPrefix []string) (*Real, error) {
-	bin, err := lookUfw()
+	r, err := runner.New(runner.Options{
+		Bin:         "ufw",
+		SearchPaths: searchPaths,
+		SudoPrefix:  sudoPrefix,
+		InstallHint: installHint,
+	})
 	if err != nil {
 		return nil, err
 	}
-	r := &Real{Bin: bin, Timeout: defaultTimeout}
-	if os.Geteuid() == 0 || len(sudoPrefix) == 0 {
-		return r, nil
-	}
-	resolved, err := exec.LookPath(sudoPrefix[0])
-	if err != nil {
-		return nil, fmt.Errorf(
-			"%w: not running as root and %q was not found; re-run with sudo, "+
-				"or use --demo to explore the UI", ErrNotAvailable, sudoPrefix[0])
-	}
-	r.Privilege = append([]string{resolved}, sudoPrefix[1:]...)
-	return r, nil
-}
-
-// lookUfw finds the ufw binary, including the sbin paths that are commonly
-// missing from a non-root PATH.
-func lookUfw() (string, error) {
-	if bin, err := exec.LookPath("ufw"); err == nil {
-		return bin, nil
-	}
-	for _, candidate := range []string{"/usr/sbin/ufw", "/sbin/ufw", "/usr/local/sbin/ufw"} {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf(
-		"%w: the ufw command was not found; install it "+
-			"(apt install ufw / pacman -S ufw), or use --demo to explore the UI",
-		ErrNotAvailable)
+	return &Real{run: r}, nil
 }
 
 // Name identifies the backend.
 func (r *Real) Name() string { return "ufw" }
 
 // Describe names the backend for the status line.
-func (r *Real) Describe() string {
-	if len(r.Privilege) == 0 {
-		return "ufw (root)"
-	}
-	return "ufw via " + strings.Join(r.Privilege, " ")
-}
+func (r *Real) Describe() string { return r.run.Describe() }
 
 // Capabilities reports what this backend supports.
 func (r *Real) Capabilities() firewall.Capabilities { return capabilities }
 
-// argv builds the full command line, replacing the "ufw" placeholder in
-// Argv[0] with the resolved binary and prefixing the privilege wrapper.
-func (r *Real) argv(cmd firewall.Command) (bin string, args []string) {
-	rest := cmd.Argv
-	if len(rest) > 0 && rest[0] == "ufw" {
-		rest = rest[1:]
-	}
-	if len(r.Privilege) == 0 {
-		return r.Bin, rest
-	}
-	return r.Privilege[0], append(append([]string{}, r.Privilege[1:]...),
-		append([]string{r.Bin}, rest...)...)
-}
-
 // Preview renders the exact command line Run will execute.
-func (r *Real) Preview(cmd firewall.Command) string {
-	if len(r.Privilege) == 0 {
-		return cmd.String()
-	}
-	return strings.Join(r.Privilege, " ") + " " + cmd.String()
-}
+func (r *Real) Preview(cmd firewall.Command) string { return r.run.Preview(cmd) }
 
-// exec runs one ufw invocation and returns its combined output.
-func (r *Real) exec(ctx context.Context, cmd firewall.Command) (string, error) {
-	timeout := r.Timeout
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	bin, args := r.argv(cmd)
-	c := exec.CommandContext(ctx, bin, args...) //nolint:gosec // argv is built by this package
-	// LANG=C keeps ufw's output in the English form the parsers expect.
-	c.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
-	out, err := c.CombinedOutput()
-	text := strings.TrimSpace(string(out))
-	if err != nil {
-		return text, r.wrapErr(cmd, text, err)
-	}
-	return text, nil
-}
-
-// wrapErr turns an exec failure into a message worth showing in a status line.
-func (r *Real) wrapErr(cmd firewall.Command, output string, err error) error {
-	preview := r.Preview(cmd)
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("`%s` timed out", preview)
-	}
-	if len(r.Privilege) > 0 && strings.Contains(output, "password is required") {
-		return fmt.Errorf("sudo needs a password: run `sudo -v` in another " +
-			"terminal, then retry")
-	}
-	if output != "" {
-		return fmt.Errorf("`%s` failed: %s", preview, firstLine(output))
-	}
-	return fmt.Errorf("`%s` failed: %w", preview, err)
-}
-
-// firstLine keeps status-line errors to a single line.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
-
-// Load reads status (verbose + numbered) and the app profile list.
+// Load reads status (verbose + numbered) and the app profile list. Every ufw
+// read needs root, so these go through the runner's privileged read path.
 func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
-	verboseOut, err := r.exec(ctx, firewall.Command{Argv: []string{"ufw", "status", "verbose"}})
+	verboseOut, err := r.run.Read(ctx, "ufw", "status", "verbose")
 	if err != nil {
 		return firewall.Model{}, err
 	}
-	numberedOut, err := r.exec(ctx, firewall.Command{Argv: []string{"ufw", "status", "numbered"}})
+	numberedOut, err := r.run.Read(ctx, "ufw", "status", "numbered")
 	if err != nil {
 		return firewall.Model{}, err
 	}
 	model := MergeModels(ParseStatus(verboseOut), ParseStatus(numberedOut))
 	// A missing app profile list is not fatal: the rule form simply offers no
 	// profile picker.
-	appsCmd := firewall.Command{Argv: []string{"ufw", "app", "list"}}
-	if appsOut, appErr := r.exec(ctx, appsCmd); appErr == nil {
+	if appsOut, appErr := r.run.Read(ctx, "ufw", "app", "list"); appErr == nil {
 		model.Services = ParseAppList(appsOut)
 	}
 	return model, nil
@@ -180,7 +82,7 @@ func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 
 // Run executes a previewed command.
 func (r *Real) Run(ctx context.Context, cmd firewall.Command) (string, error) {
-	return r.exec(ctx, cmd)
+	return r.run.Run(ctx, cmd)
 }
 
 // BuildAddRule creates a rule.

@@ -1,6 +1,6 @@
 // Package firewalld is the placeholder for the firewalld (firewall-cmd)
 // implementation of firewall.Backend. It compiles and satisfies the interface
-// today, but every operation reports ErrNotImplemented; fwall only selects it
+// today, but every operation reports ErrNotImplemented; tui-firewall only selects it
 // when the user asks for it explicitly, so the error is visible instead of
 // silent.
 //
@@ -33,7 +33,7 @@ import (
 	"errors"
 	"os/exec"
 
-	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewall"
 )
 
 // ErrNotImplemented reports that the firewalld backend is not written yet.
@@ -49,7 +49,7 @@ func Available() bool {
 }
 
 // Backend is the not-yet-implemented firewalld backend. It exists so the rest
-// of fwall can be written against the interface only.
+// of tui-firewall can be written against the interface only.
 type Backend struct{}
 
 // New returns the stub backend.
