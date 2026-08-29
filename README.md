@@ -8,6 +8,8 @@ Every tool is a **single static binary**, works on Debian/Ubuntu and Arch, and
 runs **no daemon**. Nothing is installed in the background, nothing keeps
 running after you quit.
 
+![fwall](docs/screenshots/fwall-main.png)
+
 ## Tools
 
 | Tool | What it does | Status |

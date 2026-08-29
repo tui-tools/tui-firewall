@@ -21,7 +21,23 @@ the gap on a server or a tiling desktop, in the Omarchy visual style.
  9 rules  ·  ? for help
 ```
 
-> Screenshots: _to add_ — `docs/screenshot-main.png`, `docs/screenshot-add.png`.
+
+## Screenshots
+
+Rendered from the real binary in `--demo` mode by `docs/screenshots/render.py`
+(`make screenshots`), Tokyo Night palette.
+
+![Rules table](../../docs/screenshots/fwall-main.png)
+
+Every change is previewed as the exact `ufw` command and confirmed before it runs:
+
+![Delete confirmation](../../docs/screenshots/fwall-delete.png)
+
+![Add rule form](../../docs/screenshots/fwall-add.png)
+
+![Default policies](../../docs/screenshots/fwall-policies.png)
+
+![Help](../../docs/screenshots/fwall-help.png)
 
 ## Try it without root
 

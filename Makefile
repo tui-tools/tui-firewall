@@ -66,3 +66,7 @@ tidy:
 ## clean: remove build output.
 clean:
 	rm -rf $(BIN)
+
+.PHONY: screenshots
+screenshots: build ## Re-render the README screenshots from --demo (needs chrome/chromium)
+	python3 docs/screenshots/render.py --bin bin/fwall --out docs/screenshots
