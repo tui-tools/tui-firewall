@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "name": "tui-firewall",
+  "binary": "tui-firewall",
+  "tagline": "The system firewall, with every change previewed before it runs",
+  "description": "A terminal UI for the Linux firewall. It shows the rules you actually have — action, direction, ports, source, destination, app profile, IPv6 and `route` rules included — alongside the default policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows that value and hands the same one to the runner, so what you read is what executes. `ufw` today, `firewalld` behind the same interface next.\n\nRun `tui-firewall --demo` to drive an in-memory sample firewall: every key works, every command is built and previewed for real, and nothing touches your system.",
+  "category": "firewall",
+  "homepage": "https://github.com/tui-tools/tui-firewall",
+  "repo": "https://github.com/tui-tools/tui-firewall",
+  "license": "MIT",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "icon": "assets/icon.svg",
+  "logo": "assets/logo.png",
+  "screenshots": [
+    {
+      "path": "docs/screenshots/tui-firewall-main.png",
+      "caption": "The rules table, with status, default policies and logging in the header"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-delete.png",
+      "caption": "Deleting a rule: the exact ufw command line, shown before it runs"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-add.png",
+      "caption": "The add-rule form: action, direction, ports, protocol, source, destination"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-policies.png",
+      "caption": "Changing a default policy for incoming, outgoing or routed traffic"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-help.png",
+      "caption": "The help screen, generated from the same action table as the key map"
+    }
+  ],
+  "keys": [
+    { "key": "a", "action": "Add a rule" },
+    { "key": "d", "action": "Delete the selected rule" },
+    { "key": "e", "action": "Enable or disable the firewall" },
+    { "key": "p", "action": "Change a default policy" },
+    { "key": "L", "action": "Change the logging level" },
+    { "key": "r", "action": "Reload the firewall" },
+    { "key": "/", "action": "Filter rules across every column" },
+    { "key": "[ / ]", "action": "Previous / next group, on multi-group backends" },
+    { "key": "R", "action": "Re-read the firewall" },
+    { "key": "?", "action": "Help" },
+    { "key": "q", "action": "Quit" }
+  ],
+  "install": {
+    "pacman": {
+      "available": false,
+      "package": "tui-firewall",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo pacman -S tui-firewall",
+      "url": "https://pkgs.tui.tools/arch",
+      "note": "Add the tui-tools repository to pacman.conf first."
+    },
+    "aur": {
+      "available": false,
+      "package": "tui-firewall-bin",
+      "repo": "aur",
+      "command": "paru -S tui-firewall-bin",
+      "url": "https://aur.archlinux.org/packages/tui-firewall-bin",
+      "note": "The -bin package installs the released static binary."
+    },
+    "apt": {
+      "available": false,
+      "package": "tui-firewall",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo apt install tui-firewall",
+      "url": "https://pkgs.tui.tools/deb",
+      "note": "Add the tui-tools apt repository and its keyring first."
+    },
+    "dnf": {
+      "available": false,
+      "package": "tui-firewall",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo dnf install tui-firewall",
+      "url": "https://pkgs.tui.tools/rpm",
+      "note": "Add the tui-tools.repo file first."
+    },
+    "zypper": {
+      "available": false,
+      "package": "tui-firewall",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo zypper install tui-firewall",
+      "url": "https://pkgs.tui.tools/rpm",
+      "note": "Add the tui-tools repository first."
+    },
+    "binary": {
+      "available": true,
+      "pattern": "tui-firewall_{version}_linux_{arch}.tar.gz",
+      "command": "curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v{version}/tui-firewall_{version}_linux_{arch}.tar.gz | tar -xz tui-firewall\nsudo install -m0755 tui-firewall /usr/local/bin/tui-firewall",
+      "url": "https://github.com/tui-tools/tui-firewall/releases",
+      "note": "One static binary. Verify it against checksums.txt from the same release."
+    },
+    "source": {
+      "available": true,
+      "command": "git clone https://github.com/tui-tools/tui-firewall\ncd tui-firewall && make build\nsudo install -m0755 bin/tui-firewall /usr/local/bin/tui-firewall",
+      "url": "https://github.com/tui-tools/tui-firewall",
+      "note": "Needs Go 1.26 or newer."
+    }
+  },
+  "security": {
+    "needs_sudo": "Reading ufw's state needs root, and so does every change: add, delete, enable, disable, reload, default policy and logging level. Escalation goes through `sudo -n`, which never prompts, and `--sudo \"\"` runs the command directly when you are already root.",
+    "preview_before_run": true,
+    "no_daemon": true,
+    "no_network": true,
+    "static_binary": true,
+    "signed_releases": false,
+    "config_paths": [
+      "/etc/tui-firewall/config.toml",
+      "~/.config/tui-firewall/config.toml"
+    ]
+  },
+  "maintainers": [
+    { "name": "Edimar Cardoso", "github": "edimarlnx" }
+  ],
+  "since": "2026-08-29",
+  "keywords": ["ufw", "firewalld", "iptables", "nftables", "firewall", "tui", "bubbletea"]
+}
