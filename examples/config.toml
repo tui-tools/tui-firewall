@@ -1,0 +1,18 @@
+# fwall configuration.
+#
+# Read from /etc/fwall/config.toml first, then ~/.config/fwall/config.toml,
+# with the user file overriding the machine-wide one. Command line flags win
+# over both.
+
+# Which firewall to drive: "auto", "ufw" or "firewalld".
+# "auto" prefers an installed backend whose service is running.
+backend = "auto"
+
+# Privilege escalation prefix used when fwall is not running as root.
+# "sudo -n" never prompts: run `sudo -v` first, or start fwall with sudo.
+# Set to "" to run the firewall command directly.
+sudo = "sudo -n"
+
+# Path to an Omarchy-style colors.toml. Empty follows the active Omarchy
+# theme when present, and falls back to the built-in Tokyo Night palette.
+theme = ""

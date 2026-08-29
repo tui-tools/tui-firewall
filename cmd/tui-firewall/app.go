@@ -1,0 +1,636 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/edimarlnx/tui-tools/internal/firewall"
+	"github.com/edimarlnx/tui-tools/pkg/theme"
+	"github.com/edimarlnx/tui-tools/pkg/ui"
+)
+
+// mode is the screen the app currently shows. Only one dialog is open at a
+// time, which keeps the update loop flat.
+type mode int
+
+const (
+	modeTable mode = iota
+	modeConfirm
+	modeFilter
+	modePicker
+	modeForm
+	modeHelp
+)
+
+// pickerTarget says what a picker's answer applies to.
+type pickerTarget int
+
+const (
+	pickerNone pickerTarget = iota
+	pickerLogging
+	pickerPolicySlot
+	pickerPolicyValue
+	pickerFormChoice
+	pickerGroup
+)
+
+// app is the fwall Bubble Tea model.
+type app struct {
+	backend firewall.Backend
+	theme   theme.Theme
+	caps    firewall.Capabilities
+
+	model firewall.Model
+	// group is the name of the group currently shown.
+	group string
+	// visible holds the rules left after the filter, in display order.
+	visible []firewall.Rule
+
+	width, height int
+	cursor        int
+	offset        int
+	filter        string
+
+	mode    mode
+	confirm ui.Confirm
+	input   ui.Input
+	picker  ui.Picker
+	form    ruleForm
+
+	// pickerFor says what the open picker will answer.
+	pickerFor pickerTarget
+	// pendingSlot remembers which policy slot the user picked first.
+	pendingSlot firewall.PolicyDirection
+
+	status     string
+	statusKind ui.StatusKind
+	loading    bool
+	// loadFailed reports that the last Load returned an error, so the empty
+	// state does not claim the firewall simply has no rules.
+	loadFailed bool
+	// busy blocks input while a command runs.
+	busy bool
+}
+
+// loadedMsg carries the result of a Load.
+type loadedMsg struct {
+	model firewall.Model
+	err   error
+}
+
+// ranMsg carries the result of a Run.
+type ranMsg struct {
+	cmd    firewall.Command
+	output string
+	err    error
+}
+
+// newApp builds the model around a backend.
+func newApp(backend firewall.Backend, th theme.Theme) *app {
+	a := &app{
+		backend: backend,
+		theme:   th,
+		caps:    backend.Capabilities(),
+		width:   80,
+		height:  24,
+		loading: true,
+	}
+	if th.Warning != "" {
+		a.setStatus(ui.StatusWarn, th.Warning)
+	}
+	return a
+}
+
+// Init starts the first load.
+func (a *app) Init() tea.Cmd { return a.load() }
+
+// load reads the firewall state in the background.
+func (a *app) load() tea.Cmd {
+	backend := a.backend
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		model, err := backend.Load(ctx)
+		return loadedMsg{model: model, err: err}
+	}
+}
+
+// run executes a confirmed command in the background.
+func (a *app) run(cmd firewall.Command) tea.Cmd {
+	backend := a.backend
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		out, err := backend.Run(ctx, cmd)
+		return ranMsg{cmd: cmd, output: out, err: err}
+	}
+}
+
+// setStatus records a plain message for the status line.
+func (a *app) setStatus(kind ui.StatusKind, message string) {
+	a.status = message
+	a.statusKind = kind
+}
+
+// setStatusf records a formatted message for the status line.
+func (a *app) setStatusf(kind ui.StatusKind, format string, args ...any) {
+	a.setStatus(kind, fmt.Sprintf(format, args...))
+}
+
+// Update is the main event loop.
+func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width, a.height = msg.Width, msg.Height
+		a.clampCursor()
+		return a, nil
+
+	case loadedMsg:
+		a.loading = false
+		if msg.err != nil {
+			a.loadFailed = true
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, nil
+		}
+		a.loadFailed = false
+		a.model = msg.model
+		if _, ok := a.model.Group(a.group); !ok && len(a.model.Groups) > 0 {
+			a.group = a.model.Groups[0].Name
+		}
+		a.applyFilter()
+		return a, nil
+
+	case ranMsg:
+		a.busy = false
+		if msg.err != nil {
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, a.load()
+		}
+		summary := strings.TrimSpace(msg.output)
+		if summary == "" {
+			summary = "done"
+		}
+		a.setStatusf(ui.StatusOK, "%s: %s", msg.cmd.Description, firstLine(summary))
+		a.loading = true
+		return a, a.load()
+
+	case tea.KeyMsg:
+		return a.handleKey(msg)
+	}
+
+	// Anything else (cursor blink, …) only concerns an open text input.
+	if a.mode == modeFilter {
+		cmd, _ := a.input.Update(msg)
+		return a, cmd
+	}
+	if a.mode == modeForm {
+		return a, a.form.updateActive(msg)
+	}
+	return a, nil
+}
+
+// handleKey routes a key press to the open dialog, or to the table.
+func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ctrl+c always quits, even mid-dialog.
+	if msg.Type == tea.KeyCtrlC {
+		return a, tea.Quit
+	}
+	if a.busy {
+		// A command is running: swallow input rather than queueing surprises.
+		return a, nil
+	}
+
+	switch a.mode {
+	case modeConfirm:
+		return a.handleConfirm(msg)
+	case modeFilter:
+		return a.handleFilter(msg)
+	case modePicker:
+		return a.handlePicker(msg)
+	case modeForm:
+		return a.handleForm(msg)
+	case modeHelp:
+		a.mode = modeTable
+		return a, nil
+	default:
+		return a.handleTableKey(msg)
+	}
+}
+
+// handleConfirm resolves the confirm dialog.
+func (a *app) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a.confirm.Update(msg)
+	if !a.confirm.Done {
+		return a, nil
+	}
+	a.mode = modeTable
+	confirmed := a.confirm.Confirmed
+	cmd, ok := a.confirm.Payload.(firewall.Command)
+	a.confirm = ui.Confirm{}
+	if !confirmed || !ok {
+		a.setStatus(ui.StatusInfo, "cancelled")
+		return a, nil
+	}
+	a.busy = true
+	a.setStatusf(ui.StatusInfo, "running %s…", a.backend.Preview(cmd))
+	return a, a.run(cmd)
+}
+
+// handleFilter resolves the filter prompt.
+func (a *app) handleFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cmd, _ := a.input.Update(msg)
+	if !a.input.Done {
+		// Filter as the user types.
+		a.filter = a.input.Value()
+		a.applyFilter()
+		return a, cmd
+	}
+	if a.input.Accepted {
+		a.filter = a.input.Value()
+	} else {
+		a.filter = ""
+	}
+	a.applyFilter()
+	a.mode = modeTable
+	return a, nil
+}
+
+// handlePicker resolves whichever picker is open.
+func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a.picker.Update(msg)
+	if !a.picker.Done {
+		return a, nil
+	}
+	choice := a.picker.Selected()
+	accepted := a.picker.Accepted
+	target := a.pickerFor
+	a.picker = ui.Picker{}
+	a.pickerFor = pickerNone
+
+	if !accepted {
+		a.mode = modeTable
+		if target == pickerFormChoice {
+			a.mode = modeForm
+		}
+		return a, nil
+	}
+
+	switch target {
+	case pickerLogging:
+		a.mode = modeTable
+		return a, a.buildAndConfirm("Set logging level", func() (firewall.Command, error) {
+			return a.backend.BuildSetLogging(choice)
+		})
+	case pickerPolicySlot:
+		a.pendingSlot = firewall.PolicyDirection(choice)
+		return a, a.openPolicyValuePicker()
+	case pickerPolicyValue:
+		a.mode = modeTable
+		slot := a.pendingSlot
+		return a, a.buildAndConfirm("Change default policy", func() (firewall.Command, error) {
+			return a.backend.BuildSetPolicy(a.group, slot, firewall.Policy(choice))
+		})
+	case pickerGroup:
+		a.group = choice
+		a.cursor, a.offset = 0, 0
+		a.applyFilter()
+		a.mode = modeTable
+		return a, nil
+	case pickerFormChoice:
+		a.form.setActiveValue(choice)
+		a.mode = modeForm
+		return a, nil
+	default:
+		a.mode = modeTable
+		return a, nil
+	}
+}
+
+// handleForm routes keys to the add-rule form.
+func (a *app) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.mode = modeTable
+		a.setStatus(ui.StatusInfo, "cancelled")
+		return a, nil
+	case "tab", "down":
+		a.form.next()
+		return a, nil
+	case "shift+tab", "up":
+		a.form.prev()
+		return a, nil
+	case "left":
+		if a.form.activeIsChoice() {
+			a.form.cycle(-1)
+			return a, nil
+		}
+	case "right":
+		if a.form.activeIsChoice() {
+			a.form.cycle(1)
+			return a, nil
+		}
+	case "enter":
+		if a.form.activeIsChoice() {
+			// A choice field opens a picker: better than cycling a long list.
+			a.picker = ui.NewPicker(a.form.activeLabel(),
+				a.form.activeOptions(), a.form.activeValue())
+			a.pickerFor = pickerFormChoice
+			a.mode = modePicker
+			return a, nil
+		}
+		return a, a.submitForm()
+	}
+	return a, a.form.updateActive(msg)
+}
+
+// submitForm builds the add command from the form and opens the confirm dialog.
+func (a *app) submitForm() tea.Cmd {
+	spec, err := a.form.spec()
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	cmd, err := a.backend.BuildAddRule(a.group, spec)
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	a.mode = modeConfirm
+	a.confirm = ui.Confirm{
+		Title:   cmd.Description,
+		Body:    "The firewall will be changed as follows.",
+		Command: a.backend.Preview(cmd),
+		Payload: cmd,
+	}
+	return nil
+}
+
+// handleTableKey handles the main screen.
+func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc":
+		return a, tea.Quit
+	case "?":
+		a.mode = modeHelp
+	case "j", "down":
+		a.moveCursor(1)
+	case "k", "up":
+		a.moveCursor(-1)
+	case "g", "home":
+		a.cursor, a.offset = 0, 0
+	case "G", "end":
+		a.cursor = max(len(a.visible)-1, 0)
+		a.clampCursor()
+	case "pgdown", "ctrl+f":
+		a.moveCursor(a.tableHeight())
+	case "pgup", "ctrl+b":
+		a.moveCursor(-a.tableHeight())
+	case "/":
+		a.input = ui.NewInput("Filter rules", "port, address, comment…", a.filter)
+		a.input.Help = "Matches any column. Empty clears the filter."
+		a.mode = modeFilter
+	case "R", "ctrl+r":
+		a.loading = true
+		return a, a.load()
+	case "a":
+		a.form = newRuleForm(a.caps, a.model.Services)
+		a.mode = modeForm
+	case "d":
+		return a, a.confirmDelete()
+	case "e":
+		return a, a.confirmToggle()
+	case "r":
+		return a, a.buildAndConfirm("Reload the firewall", a.backend.BuildReload)
+	case "p":
+		return a, a.openPolicySlotPicker()
+	case "L":
+		return a, a.openLoggingPicker()
+	case "]", "tab":
+		a.cycleGroup(1)
+	case "[", "shift+tab":
+		a.cycleGroup(-1)
+	}
+	return a, nil
+}
+
+// buildAndConfirm runs a command builder and opens the confirm dialog, or
+// reports the builder's error in the status line.
+func (a *app) buildAndConfirm(title string,
+	build func() (firewall.Command, error)) tea.Cmd {
+	cmd, err := build()
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	a.mode = modeConfirm
+	a.confirm = ui.Confirm{
+		Title:   title,
+		Body:    cmd.Description + ".",
+		Command: a.backend.Preview(cmd),
+		Danger:  cmd.Destructive,
+		Payload: cmd,
+	}
+	return nil
+}
+
+// confirmDelete asks before deleting the selected rule.
+func (a *app) confirmDelete() tea.Cmd {
+	rule, ok := a.selectedRule()
+	if !ok {
+		a.setStatus(ui.StatusWarn, "no rule selected")
+		return nil
+	}
+	cmd, err := a.backend.BuildDeleteRule(a.group, rule)
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	a.mode = modeConfirm
+	a.confirm = ui.Confirm{
+		Title:   cmd.Description,
+		Body:    "Rule: " + describeRule(rule),
+		Command: a.backend.Preview(cmd),
+		Danger:  true,
+		Payload: cmd,
+	}
+	return nil
+}
+
+// confirmToggle asks before enabling or disabling the firewall.
+func (a *app) confirmToggle() tea.Cmd {
+	enable := !a.model.Enabled
+	cmd, err := a.backend.BuildSetEnabled(enable)
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	body := "The firewall will start filtering traffic with the rules below."
+	if !enable {
+		body = "All traffic will be allowed until the firewall is enabled again."
+	}
+	if enable {
+		body += "\nMake sure a rule allows your SSH session before confirming."
+	}
+	a.mode = modeConfirm
+	a.confirm = ui.Confirm{
+		Title:   cmd.Description,
+		Body:    body,
+		Command: a.backend.Preview(cmd),
+		Danger:  true,
+		Payload: cmd,
+	}
+	return nil
+}
+
+// openLoggingPicker offers the backend's logging levels.
+func (a *app) openLoggingPicker() tea.Cmd {
+	if !a.caps.SupportsLogging || len(a.caps.LogLevels) == 0 {
+		a.setStatus(ui.StatusWarn, "this backend does not expose logging levels")
+		return nil
+	}
+	a.picker = ui.NewPicker("Logging level", a.caps.LogLevels, a.model.Logging)
+	a.pickerFor = pickerLogging
+	a.mode = modePicker
+	return nil
+}
+
+// openPolicySlotPicker asks which default policy to change.
+func (a *app) openPolicySlotPicker() tea.Cmd {
+	group, ok := a.model.Group(a.group)
+	if !ok || len(group.PolicySlots) == 0 {
+		a.setStatus(ui.StatusWarn, "this backend has no default policies")
+		return nil
+	}
+	options := make([]string, 0, len(group.PolicySlots))
+	for _, slot := range group.PolicySlots {
+		options = append(options, string(slot))
+	}
+	a.picker = ui.NewPicker("Default policy to change", options, "")
+	a.pickerFor = pickerPolicySlot
+	a.mode = modePicker
+	return nil
+}
+
+// openPolicyValuePicker asks for the new value of the chosen policy slot.
+func (a *app) openPolicyValuePicker() tea.Cmd {
+	options := make([]string, 0, len(a.caps.Policies))
+	for _, p := range a.caps.Policies {
+		options = append(options, string(p))
+	}
+	group, _ := a.model.Group(a.group)
+	a.picker = ui.NewPicker("Policy for "+string(a.pendingSlot), options,
+		string(currentPolicy(group, a.pendingSlot)))
+	a.pickerFor = pickerPolicyValue
+	a.mode = modePicker
+	return nil
+}
+
+// currentPolicy reads the policy currently set in a slot.
+func currentPolicy(g firewall.Group, slot firewall.PolicyDirection) firewall.Policy {
+	switch slot {
+	case firewall.PolicyIncoming:
+		return g.Default.Incoming
+	case firewall.PolicyOutgoing:
+		return g.Default.Outgoing
+	case firewall.PolicyRouted:
+		return g.Default.Routed
+	case firewall.PolicyTarget:
+		return firewall.Policy(g.Default.Target)
+	default:
+		return ""
+	}
+}
+
+// cycleGroup moves to the next or previous group. It is a no-op when the
+// backend exposes a single group, as ufw does.
+func (a *app) cycleGroup(delta int) {
+	if len(a.model.Groups) < 2 {
+		return
+	}
+	index := 0
+	for i, g := range a.model.Groups {
+		if g.Name == a.group {
+			index = i
+			break
+		}
+	}
+	index = (index + delta + len(a.model.Groups)) % len(a.model.Groups)
+	a.group = a.model.Groups[index].Name
+	a.cursor, a.offset = 0, 0
+	a.applyFilter()
+}
+
+// applyFilter recomputes the visible rules from the current filter.
+func (a *app) applyFilter() {
+	group, ok := a.model.Group(a.group)
+	if !ok {
+		a.visible = nil
+		return
+	}
+	if a.filter == "" {
+		a.visible = group.Rules
+		a.clampCursor()
+		return
+	}
+	needle := strings.ToLower(a.filter)
+	var kept []firewall.Rule
+	for _, r := range group.Rules {
+		if strings.Contains(strings.ToLower(ruleHaystack(r)), needle) {
+			kept = append(kept, r)
+		}
+	}
+	a.visible = kept
+	a.clampCursor()
+}
+
+// ruleHaystack is the text the filter matches against.
+func ruleHaystack(r firewall.Rule) string {
+	parts := []string{
+		string(r.Action), string(r.Direction), r.To, r.From, r.Ports, r.Proto,
+		r.Service, r.Comment, string(r.Family), r.Raw,
+	}
+	return strings.Join(parts, " ")
+}
+
+// selectedRule returns the highlighted rule.
+func (a *app) selectedRule() (firewall.Rule, bool) {
+	if a.cursor < 0 || a.cursor >= len(a.visible) {
+		return firewall.Rule{}, false
+	}
+	return a.visible[a.cursor], true
+}
+
+// moveCursor moves the selection and keeps the viewport in sync.
+func (a *app) moveCursor(delta int) {
+	a.cursor += delta
+	a.clampCursor()
+}
+
+// clampCursor keeps the cursor and the scroll offset within range.
+func (a *app) clampCursor() {
+	if len(a.visible) == 0 {
+		a.cursor, a.offset = 0, 0
+		return
+	}
+	a.cursor = min(max(a.cursor, 0), len(a.visible)-1)
+
+	height := a.tableHeight()
+	if a.cursor < a.offset {
+		a.offset = a.cursor
+	}
+	if a.cursor >= a.offset+height {
+		a.offset = a.cursor - height + 1
+	}
+	a.offset = max(min(a.offset, max(len(a.visible)-height, 0)), 0)
+}
+
+// firstLine keeps status messages to one line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
