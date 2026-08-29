@@ -1,5 +1,9 @@
 # tui-tools
 
+> **Status: early, under validation.** Independent tools that follow the
+> Omarchy visual style; they are **not** part of the Omarchy project and not
+> endorsed by its maintainers. Expect rough edges.
+
 A family of terminal tools for Linux, in the visual style of
 [Omarchy](https://omarchy.org): the same palette, the same key language and the
 same "show me before you do it" behaviour as lazygit, lazydocker and btop.
