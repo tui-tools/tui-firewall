@@ -1,0 +1,68 @@
+# GoReleaser configuration for the tui-tools monorepo.
+#
+# Each tool is released on its own tag, prefixed with the tool name:
+#
+#   git tag fwall/v0.1.0 && git push origin fwall/v0.1.0
+#
+# `monorepo.tag_prefix` makes GoReleaser treat "fwall/" tags as releases of the
+# fwall tool only, so a new version of one tool never re-releases the others.
+# Add a second stanza (and a matching `builds` entry) when a new tool lands.
+version: 2
+
+project_name: fwall
+
+monorepo:
+  tag_prefix: fwall/
+  dir: .
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: fwall
+    main: ./cmd/fwall
+    binary: fwall
+    env:
+      # Static binaries: no libc dependency, one file to copy anywhere.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: fwall
+    ids:
+      - fwall
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+      - src: cmd/fwall/README.md
+        dst: README.fwall.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
