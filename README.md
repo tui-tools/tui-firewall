@@ -262,7 +262,7 @@ backend can be selected at all, which is itself a thing worth reporting.
 
 ```console
 $ tui-firewall --report
-tui-firewall 0.2.2 (kit v0.2.8)
+tui-firewall 0.2.2 (kit v0.2.9)
 backend: firewalld 2.3.2
 mode: live
 distro: fedora 42 (Fedora Linux 42 (Workstation Edition))
