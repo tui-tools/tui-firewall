@@ -33,24 +33,6 @@ check() {
   fi
 }
 
-# check_fails is the inverse: the command must fail, and its output must
-# explain why. A backend that is deliberately not implemented is a result to
-# assert, not a result to skip.
-check_fails() {
-  local label="$1" command="$2" pattern="$3" output status
-  output=$(eval "$command" 2>&1)
-  status=$?
-  if [[ $status -ne 0 ]] && grep -qE "$pattern" <<<"$output"; then
-    printf 'PASS  %s\n' "$label"
-    pass=$((pass + 1))
-  else
-    printf 'FAIL  %s (expected failure, exit %d)\n' "$label" "$status"
-    sed 's/^/      | /' <<<"$output" | head -12
-    fail=$((fail + 1))
-  fi
-}
-
-
 # --- compatibility evidence -------------------------------------------------
 #
 # The manifest's `tested` list is generated, not claimed: it is rebuilt from
@@ -87,8 +69,12 @@ record_compat() {
 echo "--- tui-firewall smoke on $(. /etc/os-release && echo "$PRETTY_NAME")"
 
 # Which backend this machine should be driving, decided the way the tool
-# decides it: what is installed.
-if command -v ufw >/dev/null; then
+# decides it: the one whose service is running, then whatever is installed.
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+  backend=firewalld
+elif systemctl is-active --quiet ufw 2>/dev/null; then
+  backend=ufw
+elif command -v ufw >/dev/null; then
   backend=ufw
 elif command -v firewall-cmd >/dev/null; then
   backend=firewalld
@@ -130,31 +116,79 @@ case "$backend" in
     ;;
 
   firewalld)
-    # firewalld is a documented stub in tui-firewall today: internal/firewalld
-    # satisfies the interface and every operation returns ErrNotImplemented.
-    # The assertion is therefore that it fails, and fails legibly — so that the
-    # day someone implements it, this test turns red and gets updated rather
-    # than silently passing on a machine nobody checked.
-    check_fails "the firewalld backend is still an explicit stub" \
-      "sudo -n $bin --backend firewalld --check" \
-      'not implemented yet'
-
-    # Auto-detection must pick firewalld here (it is the only one installed)
-    # and surface the same stub error, rather than claiming no firewall exists.
-    check_fails "auto-detection finds firewalld and reports the stub" \
+    # 1. Auto-detection lands on firewalld, and the read path works.
+    check "check reads the firewalld backend" \
       "sudo -n $bin --check" \
-      'not implemented yet'
+      '"backend": "firewalld"'
 
-    # The machine really is running firewalld, so the stub above is the tool's
-    # limitation and not an absent backend.
+    # 2. The machine really is running firewalld, and the tool agrees.
     check "firewalld is running on this machine" \
       "systemctl is-active firewalld" \
       '^active$'
+    check "the tool reports the firewall as enabled" \
+      "sudo -n $bin --check" \
+      '"enabled": true'
+
+    # 3. The default zone is parsed and comes first, which is what the header
+    #    and the zone selector are built on.
+    default_zone=$(sudo -n firewall-cmd --get-default-zone)
+    check "the default zone ($default_zone) is the first group" \
+      "sudo -n $bin --check" \
+      "\"Name\": \"$default_zone\""
+    check "the default zone is marked as such" \
+      "sudo -n $bin --check" \
+      "\"Title\": \"$default_zone \\(default\\)\""
+
+    # 4. The zone target is read into the policy slot, not left empty.
+    check "the zone target is parsed" \
+      "sudo -n $bin --check" \
+      '"Target": "(default|ACCEPT|DROP|%%REJECT%%)"'
+
+    # 5. The lab guest allows ssh; that service must be in the parsed model as
+    #    a service entry, which is the real parser test: a tool that fetched
+    #    the output but failed to parse it reports no entries at all.
+    check "ssh is parsed as a service entry" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"Kind":"service","Note":"","Action":"ALLOW","Direction":"","Proto":"","Ports":"","From":"","To":"ssh"'
+
+    # 6. A change made behind the tool's back, in the runtime configuration
+    #    only, must show up marked as such — that marker is the whole reason
+    #    this backend reads both configurations.
+    #    The entry is checked with --list-ports rather than --query-port,
+    #    because --query-port also answers yes for a port covered by a range
+    #    the zone already has, and what is being tested here is the entry.
+    sudo -n firewall-cmd --add-port=65530/tcp >/dev/null 2>&1
+    check "firewalld took the runtime-only port" \
+      "sudo -n firewall-cmd --list-ports | tr ' ' '\\n'" \
+      '^65530/tcp$'
+    check "and answers --query-port for it" \
+      "sudo -n firewall-cmd --query-port=65530/tcp" \
+      '^yes$'
+    check "the tool marks it as runtime only" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"Kind":"port","Note":"runtimeonly"'
+    check "it never reached the permanent configuration" \
+      "sudo -n firewall-cmd --permanent --list-ports | tr ' ' '\\n' | grep -c '^65530/tcp$' || true" \
+      '^0$'
+
+    sudo -n firewall-cmd --remove-port=65530/tcp >/dev/null 2>&1
+    check "the port is gone again" \
+      "sudo -n firewall-cmd --list-ports | tr ' ' '\\n' | grep -c '^65530/tcp$' || true" \
+      '^0$'
+    check "and the tool no longer reports it" \
+      "sudo -n $bin --check | grep -c 65530 || true" \
+      '^0$'
+
+    # 7. The detector describes the backend it did not choose, rather than
+    #    staying silent about it.
+    check "the report names every backend it knows" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"name":"ufw"'
     ;;
 esac
 
-# The ufw backend is the one the manifest declares a version for; the firewalld
-# path deliberately has none to probe, and record_compat says so and moves on.
+# Both backends declare a version in the manifest, so whichever one this
+# machine runs, the probed version is what gets recorded.
 if [[ $fail -eq 0 ]]; then
   record_compat "$(sudo -n "$bin" --check 2>/dev/null)" pass
 else
