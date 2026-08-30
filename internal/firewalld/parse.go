@@ -214,7 +214,10 @@ func ParseList(output string) []string {
 
 // richPartRe matches the `key="value"` and `group key="value"` pairs of a rich
 // rule, which is enough to fill the generic columns while Raw keeps the truth.
-var richPartRe = regexp.MustCompile(`(?:([a-z-]+)\s+)?([a-z-]+)="([^"]*)"`)
+// A rich rule is one line, so a value that spans one is not a value: the
+// quoted part stops at the line break rather than swallowing it into a column
+// the table then prints.
+var richPartRe = regexp.MustCompile(`(?:([a-z-]+)[ \t]+)?([a-z-]+)="([^"\r\n]*)"`)
 
 // richVerdictRe matches the trailing verdict of a rich rule.
 var richVerdictRe = regexp.MustCompile(`\b(accept|reject|drop|mark)\b`)

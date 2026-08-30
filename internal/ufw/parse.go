@@ -60,7 +60,12 @@ func parseStatus(output string) status {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), " \t")
+		// A carriage return inside a line is not a column separator ufw ever
+		// prints, but it is a character the table would send to the terminal
+		// verbatim and the cursor would obey. Treat it as the whitespace it
+		// looks like before anything is read out of the line.
+		line := strings.ReplaceAll(scanner.Text(), "\r", " ")
+		line = strings.TrimRight(line, " \t")
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case trimmed == "":
@@ -233,7 +238,10 @@ func stripV6(s string) (rest string, v6 bool) {
 func describeTarget(to string) (ports, proto, profile string) {
 	target := to
 	if m := appSuffixRe.FindStringSubmatch(target); m != nil {
-		profile = m[1]
+		// Trimmed, and dropped when the parentheses held only spaces: the
+		// profile name is what an `ufw allow <profile>` would be built
+		// around, so a blank one is no profile at all.
+		profile = strings.TrimSpace(m[1])
 		target = strings.TrimSpace(strings.TrimSuffix(target, m[0]))
 	}
 	// Drop the "on <iface>" qualifier, it is not part of the target.
