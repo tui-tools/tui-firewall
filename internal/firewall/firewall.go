@@ -95,6 +95,42 @@ const (
 	KindICMPBlock   = "icmp-block"
 )
 
+// View names the column layout a Group wants. A backend whose groups all hold
+// the same species of entry leaves it empty and gets the rule table; one
+// whose groups do not — the nftables backend shows filter rules, address
+// translation and named sets, and no single set of columns fits all three —
+// names the layout each group needs.
+//
+// It is a hint about presentation and nothing more: the UI picks columns from
+// it and never branches on it for behaviour, which is why an unknown value
+// falls back to the rule table rather than failing.
+const (
+	ViewRules   = ""
+	ViewNAT     = "nat"
+	ViewAliases = "aliases"
+)
+
+// The Rule.Extra keys the UI knows how to put in a column. A backend fills
+// the ones it has; the columns appear only for a group whose view asks for
+// them.
+const (
+	// ExtraInIface and ExtraOutIface are the interfaces a rule matches.
+	ExtraInIface  = "in"
+	ExtraOutIface = "out"
+	// ExtraCounter is the rule's packet and byte counter, already rendered.
+	ExtraCounter = "counter"
+	// ExtraTarget is what an address translation rewrites to.
+	ExtraTarget = "target"
+	// ExtraElements is the member count of a named set, ExtraReferences the
+	// number of rules that use it, and ExtraFlags its nft flags.
+	ExtraElements   = "elements"
+	ExtraReferences = "references"
+	ExtraFlags      = "flags"
+	// ExtraDetail is a one-line rendering of everything the columns of this
+	// view had no room for.
+	ExtraDetail = "detail"
+)
+
 // Rule is one entry of a Group, in backend-neutral terms.
 type Rule struct {
 	// ID identifies the rule for deletion. It is opaque to the UI: ufw uses
@@ -155,6 +191,8 @@ type Group struct {
 	Title string
 	// Description is an optional one-line note (a zone's interfaces, say).
 	Description string
+	// View names the column layout this group wants; see the View constants.
+	View string
 	// Default holds the group's default policies.
 	Default Policies
 	// PolicySlots lists which Default fields this group actually uses, in the
@@ -354,6 +392,11 @@ type Capabilities struct {
 	SupportsRouted bool
 	// SupportsLogging reports whether SetLogging is available.
 	SupportsLogging bool
+	// SupportsReload reports whether the rule set can be re-applied. nftables
+	// cannot: an nft command takes effect as it runs, and re-reading a file
+	// on disk would replace the ruleset on screen with one the tool has not
+	// shown.
+	SupportsReload bool
 	// SupportsFamily reports whether RuleSpec.Family is honoured.
 	SupportsFamily bool
 	// SupportsLog reports whether RuleSpec.Log is honoured.

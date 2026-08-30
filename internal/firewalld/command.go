@@ -71,6 +71,7 @@ var capabilities = firewall.Capabilities{
 	SupportsComments: false,
 	SupportsRouted:   false,
 	SupportsLogging:  true,
+	SupportsReload:   true,
 	SupportsFamily:   true,
 	SupportsLog:      true,
 	SupportsEnable:   false,

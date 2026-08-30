@@ -459,6 +459,8 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openLoggingPicker()
 	case "x":
 		return a, a.openExtrasMenu()
+	case "v":
+		return a, a.openGroupPicker()
 	case "]", "tab":
 		a.cycleGroup(1)
 	case "[", "shift+tab":
@@ -539,6 +541,27 @@ func (a *app) confirmToggle() tea.Cmd {
 	}
 	change.Destructive = true
 	a.openConfirm(change.Description, body, change)
+	return nil
+}
+
+// openGroupPicker offers every group by name. It is the same navigation [ and
+// ] do one step at a time, and it exists because a backend can have more
+// groups than stepping through them is reasonable for: a firewalld machine
+// has a dozen zones and policies, and an nftables one has a chain view per
+// hooked chain plus NAT and the aliases.
+func (a *app) openGroupPicker() tea.Cmd {
+	if len(a.model.Groups) < 2 {
+		a.setStatusf(ui.StatusInfo, "this backend has a single %s",
+			strings.ToLower(a.caps.GroupLabel))
+		return nil
+	}
+	options := make([]string, 0, len(a.model.Groups))
+	for _, group := range a.model.Groups {
+		options = append(options, group.Name)
+	}
+	a.picker = ui.NewPicker(a.caps.GroupLabel, options, a.group)
+	a.pickerFor = pickerGroup
+	a.mode = modePicker
 	return nil
 }
 
