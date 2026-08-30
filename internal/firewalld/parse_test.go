@@ -26,7 +26,7 @@ import (
 // from an assumption into a test.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec // the name is a literal in the test above, and testdata is in the repository
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}

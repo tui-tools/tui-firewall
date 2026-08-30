@@ -1,5 +1,7 @@
 <img src="assets/logo.png" alt="tui-firewall" width="240">
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tui-tools/tui-firewall/badge)](https://scorecard.dev/viewer/?uri=github.com/tui-tools/tui-firewall)
+
 A terminal UI for the Linux firewall — **ufw** and **firewalld** — that shows
 the rules you actually have and **previews the exact command line of every
 change before running it**.
