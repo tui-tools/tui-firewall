@@ -212,7 +212,7 @@
     }
   },
   "security": {
-    "needs_sudo": "Reading the firewall needs root, and so does every change. On ufw that is `ufw status` and add/delete/enable/disable/reload/policy/logging; on firewalld it is every `firewall-cmd` read and write. Escalation goes through `sudo -n`, which never prompts, and `--sudo \"\"` runs the command directly when you are already root.",
+    "needs_sudo": "Reading the firewall and every change need root: `ufw status` and its add/delete/enable/reload/policy/logging, and every `firewall-cmd` read and write. Escalation goes through `sudo -n`, which never prompts; `--sudo \"\"` runs the command directly when you are already root.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,
