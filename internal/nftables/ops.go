@@ -28,8 +28,15 @@ func (r Ruleset) Writable(group string) error {
 	switch group {
 	case GroupNAT, GroupAliases:
 		// Neither view takes a plain rule; what they take is an action, and
-		// the actions guard themselves against the table they write to.
-		return r.checkOwnTable(OwnTable)
+		// every one of those writes into the table this tool owns. Until
+		// that table exists there is nowhere for them to write.
+		if _, ok := r.Table(OwnTable); !ok {
+			return errorf(
+				"table %s does not exist yet, and every alias and address "+
+					"translation this tool creates lives in it; the actions "+
+					"menu offers to create it", OwnTable)
+		}
+		return nil
 	}
 	chain, err := r.ChainForGroup(group)
 	if err != nil {

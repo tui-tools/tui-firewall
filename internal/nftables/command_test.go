@@ -633,3 +633,20 @@ func TestCapabilitiesSayWhatNftablesCannotDo(t *testing.T) {
 		t.Error("a rule's direction is the chain it lives in")
 	}
 }
+
+func TestWritableNeedsTheTableToExist(t *testing.T) {
+	// Every alias and every translation this tool creates lives in its own
+	// table. On a machine that has none, both views are read-only, and the
+	// refusal has to point at the action that fixes it.
+	err := parseFixture(t, "firewalld").Writable(GroupAliases)
+	if err == nil {
+		t.Fatal("the alias view is not writable without the table")
+	}
+	if !strings.Contains(err.Error(), "does not exist yet") ||
+		!strings.Contains(err.Error(), "actions menu") {
+		t.Errorf("error should say what is missing and how to fix it, got: %v", err)
+	}
+	if err := parseFixture(t, "router").Writable(GroupNAT); err != nil {
+		t.Errorf("with the table present the NAT view is writable, got: %v", err)
+	}
+}
