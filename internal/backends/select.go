@@ -119,18 +119,30 @@ func unitIs(verb, unit string) bool {
 // rather than a supported setup, so the tie-break exists to be predictable
 // and explainable, not to be clever about it.
 func Select(cfg config.Config) (firewall.Backend, error) {
+	name, err := Resolve(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return build(name, cfg)
+}
+
+// Resolve names the backend Select will build, without building it. It is
+// separate because deciding *which* firewall this machine runs and reaching
+// for its binary are two different questions, and only the first one can be
+// answered — or tested — on a machine that has neither.
+func Resolve(cfg config.Config) (string, error) {
 	switch name := cfg.String(KeyBackend, BackendAuto); name {
 	case BackendUFW, BackendFirewalld:
-		return build(name, cfg)
+		return name, nil
 	case BackendAuto:
-		return selectAuto(cfg)
+		return resolveAuto()
 	default:
-		return nil, fmt.Errorf("unknown backend %q", name)
+		return "", fmt.Errorf("unknown backend %q", name)
 	}
 }
 
-// selectAuto implements the detection described on Select.
-func selectAuto(cfg config.Config) (firewall.Backend, error) {
+// resolveAuto implements the detection described on Select.
+func resolveAuto() (string, error) {
 	var installed, enabled []string
 	for _, name := range preference {
 		probe := probes[name]
@@ -139,7 +151,7 @@ func selectAuto(cfg config.Config) (firewall.Backend, error) {
 		}
 		installed = append(installed, name)
 		if probe.Active() {
-			return build(name, cfg)
+			return name, nil
 		}
 		if probe.Enabled() {
 			enabled = append(enabled, name)
@@ -148,14 +160,14 @@ func selectAuto(cfg config.Config) (firewall.Backend, error) {
 	if len(enabled) > 0 {
 		// Nothing is running, but systemd would start this one at boot: it is
 		// the firewall this machine is configured to use.
-		return build(enabled[0], cfg)
+		return enabled[0], nil
 	}
 	if len(installed) > 0 {
 		// Nothing is running or enabled: fall back to the first installed
 		// backend so the user can at least inspect it.
-		return build(installed[0], cfg)
+		return installed[0], nil
 	}
-	return nil, fmt.Errorf(
+	return "", fmt.Errorf(
 		"no supported firewall found; install ufw " +
 			"(apt install ufw / pacman -S ufw) or firewalld " +
 			"(dnf install firewalld), pick one with `backend = \"...\"` " +

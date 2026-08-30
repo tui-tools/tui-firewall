@@ -37,23 +37,23 @@ func autoConfig() config.Config {
 	return config.Config{Values: map[string]string{KeyBackend: BackendAuto}}
 }
 
-func TestSelectAutoPrefersTheActiveBackend(t *testing.T) {
+func TestResolveAutoPrefersTheActiveBackend(t *testing.T) {
 	// firewalld installed and running, ufw installed but stopped: the running
 	// one wins even though ufw comes first in the preference order.
 	stubProbes(t,
 		probeState{installed: true},
 		probeState{installed: true, active: true, enabled: true})
 
-	backend, err := Select(autoConfig())
+	name, err := Resolve(autoConfig())
 	if err != nil {
-		t.Fatalf("Select: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if backend.Name() != BackendFirewalld {
-		t.Errorf("Name = %q, want firewalld", backend.Name())
+	if name != BackendFirewalld {
+		t.Errorf("Resolve = %q, want firewalld", name)
 	}
 }
 
-func TestSelectAutoPrefersTheEnabledUnit(t *testing.T) {
+func TestResolveAutoPrefersTheEnabledUnit(t *testing.T) {
 	// Both installed, neither running: the one systemd would start at boot is
 	// the one this machine is configured to use, even though ufw is first in
 	// the preference order.
@@ -61,33 +61,33 @@ func TestSelectAutoPrefersTheEnabledUnit(t *testing.T) {
 		probeState{installed: true},
 		probeState{installed: true, enabled: true})
 
-	backend, err := Select(autoConfig())
+	name, err := Resolve(autoConfig())
 	if err != nil {
-		t.Fatalf("Select: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if backend.Name() != BackendFirewalld {
-		t.Errorf("Name = %q, want firewalld", backend.Name())
+	if name != BackendFirewalld {
+		t.Errorf("Resolve = %q, want firewalld", name)
 	}
 }
 
-func TestSelectAutoFallsBackToInstalled(t *testing.T) {
+func TestResolveAutoFallsBackToInstalled(t *testing.T) {
 	// Nothing is running and nothing is enabled: the first installed backend
 	// is used so the user can look at it.
 	stubProbes(t, probeState{}, probeState{installed: true})
 
-	backend, err := Select(autoConfig())
+	name, err := Resolve(autoConfig())
 	if err != nil {
-		t.Fatalf("Select: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if backend.Name() != BackendFirewalld {
-		t.Errorf("Name = %q, want firewalld", backend.Name())
+	if name != BackendFirewalld {
+		t.Errorf("Resolve = %q, want firewalld", name)
 	}
 }
 
-func TestSelectAutoWithoutAnyFirewall(t *testing.T) {
+func TestResolveAutoWithoutAnyFirewall(t *testing.T) {
 	stubProbes(t, probeState{}, probeState{})
 
-	_, err := Select(autoConfig())
+	_, err := Resolve(autoConfig())
 	if err == nil {
 		t.Fatal("expected an error when no firewall is installed")
 	}
@@ -98,11 +98,42 @@ func TestSelectAutoWithoutAnyFirewall(t *testing.T) {
 	}
 }
 
-func TestSelectUnknownBackend(t *testing.T) {
-	if _, err := Select(config.Config{
+func TestResolveUnknownBackend(t *testing.T) {
+	if _, err := Resolve(config.Config{
 		Values: map[string]string{KeyBackend: "iptables"},
 	}); err == nil {
 		t.Error("expected an error for an unknown backend")
+	}
+}
+
+func TestResolveHonoursAnExplicitChoice(t *testing.T) {
+	// An explicit choice skips detection entirely: the user said which
+	// firewall this machine runs, and the tool does not argue.
+	stubProbes(t, probeState{installed: true, active: true}, probeState{})
+	name, err := Resolve(config.Config{
+		Values: map[string]string{KeyBackend: BackendFirewalld},
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if name != BackendFirewalld {
+		t.Errorf("Resolve = %q, want firewalld", name)
+	}
+}
+
+func TestSelectBuildsTheResolvedBackend(t *testing.T) {
+	// Select reaches for the binary, which a test machine may not have; what
+	// matters either way is that it reports the backend Resolve named, and
+	// says so legibly when that binary is missing.
+	stubProbes(t, probeState{installed: true, active: true}, probeState{})
+	backend, err := Select(autoConfig())
+	switch {
+	case err != nil:
+		if !strings.Contains(err.Error(), "ufw") {
+			t.Errorf("error should name the backend it could not build: %v", err)
+		}
+	case backend.Name() != BackendUFW:
+		t.Errorf("Name = %q, want ufw", backend.Name())
 	}
 }
 
