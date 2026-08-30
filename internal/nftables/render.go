@@ -18,15 +18,14 @@ func decodeExprs(exprs []any) (Match, string) {
 	for _, expr := range exprs {
 		obj, ok := expr.(map[string]any)
 		if !ok {
-			parts = append(parts, compactJSON(expr))
+			parts = append(parts, oneLine(compactJSON(expr)))
 			continue
 		}
 		key, value, ok := singleKey(obj)
 		if !ok {
 			continue
 		}
-		text := decodeStatement(&m, key, value)
-		if text != "" {
+		if text := oneLine(decodeStatement(&m, key, value)); text != "" {
 			parts = append(parts, text)
 		}
 	}
@@ -82,6 +81,14 @@ func decodeMatch(m *Match, value any) string {
 	}
 	left := renderOperand(obj["left"])
 	right := renderOperand(obj["right"])
+	if left == "" && right == "" {
+		// A match with neither operand is not a match this package can render
+		// as nft syntax; showing nft's own JSON for it is honest and showing
+		// a bare operator is not.
+		rendered := compactJSON(obj)
+		m.Unmodeled = append(m.Unmodeled, rendered)
+		return rendered
+	}
 	m.collectSets(right)
 
 	column := matchColumn(obj["left"])
@@ -89,11 +96,11 @@ func decodeMatch(m *Match, value any) string {
 	// column would read as the opposite of what the rule does.
 	if column != "" && op == "==" {
 		if m.assign(column, right, obj["left"]) {
-			return left + " " + right
+			return strings.TrimSpace(left + " " + right)
 		}
 	}
 
-	rendered := left + " " + op + " " + right
+	rendered := strings.TrimSpace(left + " " + op + " " + right)
 	m.Unmodeled = append(m.Unmodeled, rendered)
 	return rendered
 }
@@ -210,8 +217,13 @@ func setOnce(field *string, value string) bool {
 }
 
 // collectSets records every named set a rendered operand refers to.
+//
+// It reads the sanitised rendering rather than the raw one on purpose: the
+// reference count and the rule the user is shown have to be counting the same
+// name, and a name that only exists before the control characters are stripped
+// is a reference to something nobody can see.
 func (m *Match) collectSets(rendered string) {
-	for _, word := range strings.FieldsFunc(rendered, func(r rune) bool {
+	for _, word := range strings.FieldsFunc(oneLine(rendered), func(r rune) bool {
 		return r == ' ' || r == ',' || r == '{' || r == '}' || r == '.'
 	}) {
 		if name, ok := strings.CutPrefix(word, "@"); ok && name != "" {
@@ -334,6 +346,13 @@ func renderOperandObject(obj map[string]any) string {
 	if !ok {
 		return ""
 	}
+	if len(obj) > 1 && !knownOperands[key] {
+		// An object carrying several fields is the payload of a statement
+		// this package does not model — a limit's rate and unit, a queue's
+		// numbers. Rendering one field of it would drop the rest silently,
+		// so nft's own JSON is shown instead.
+		return compactJSON(obj)
+	}
 	switch key {
 	case "meta":
 		return renderMeta(fieldOf(value, "key"))
@@ -358,6 +377,13 @@ func renderOperandObject(obj map[string]any) string {
 	default:
 		return key + " " + renderOperand(value)
 	}
+}
+
+// knownOperands are the object operands with a rendering of their own, which
+// keep it even when nft attached another field to them.
+var knownOperands = map[string]bool{
+	"meta": true, "ct": true, "payload": true, "prefix": true,
+	"range": true, "concat": true, "elem": true, "set": true, "fib": true,
 }
 
 // bareMetaKeys are the meta keys nft prints without the "meta" word in front,

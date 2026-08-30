@@ -125,11 +125,20 @@ func ParseRuleset(data []byte) (Ruleset, error) {
 				id := TableID{Family: c.Family, Name: c.Table}
 				table := ensure(id)
 				priority, name := parsePriority(c.Prio)
-				table.Chains = append(table.Chains, Chain{
+				chain := Chain{
 					Table: id, Name: c.Name, Handle: c.Handle,
 					Type: c.Type, Hook: c.Hook,
 					Priority: priority, PriorityName: name, Policy: c.Policy,
-				})
+				}
+				if !chain.Base() {
+					// A chain with no hook has no policy: nothing falls
+					// through to it, it is only reached by a jump. nft never
+					// prints one, and keeping a policy that arrived anyway
+					// would let the mutation guard read a promise the kernel
+					// is not making.
+					chain.Policy = ""
+				}
+				table.Chains = append(table.Chains, chain)
 			case "set", "map":
 				var s setJSON
 				if err := json.Unmarshal(raw, &s); err != nil || s.Name == "" {
@@ -233,7 +242,7 @@ func parseSetType(raw json.RawMessage) string {
 func renderElements(elems []any) []string {
 	out := make([]string, 0, len(elems))
 	for _, e := range elems {
-		if rendered := renderElement(e); rendered != "" {
+		if rendered := oneLine(renderElement(e)); rendered != "" {
 			out = append(out, rendered)
 		}
 	}

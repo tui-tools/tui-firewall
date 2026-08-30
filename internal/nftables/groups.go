@@ -189,6 +189,11 @@ func renderRule(rule Rule, direction firewall.Direction) firewall.Rule {
 			firewall.ExtraDetail:   strings.Join(match.Unmodeled, "; "),
 		},
 	}
+	if out.Action == "" && match.Log {
+		// A rule that logs and does not decide is still doing something, and
+		// an empty verdict column would say it is not.
+		out.Action = "LOG"
+	}
 	if match.Counter != nil {
 		out.Extra[firewall.ExtraCounter] = match.Counter.String()
 	}

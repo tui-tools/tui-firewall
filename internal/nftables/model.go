@@ -379,6 +379,19 @@ func jsonNumber(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
+// oneLine makes a value safe to put in a table cell. Everything this package
+// renders comes from bytes another program produced, and a control character
+// in one of them would break the table's own layout rather than just its own
+// cell — so they become spaces, and the surrounding whitespace goes.
+func oneLine(value string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' || (r >= 0 && r < 0x20) || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value))
+}
+
 // compactJSON renders a decoded value back to one line of JSON. It is the
 // last-resort rendering for an expression this package does not model: the
 // user sees exactly what nft reported, rather than a blank cell.
