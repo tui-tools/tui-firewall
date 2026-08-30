@@ -1,0 +1,22 @@
+dmz (active)
+  target: default
+  ingress-priority: 0
+  egress-priority: 0
+  icmp-block-inversion: no
+  interfaces: eth1
+  sources: 10.20.0.0/16 fd00:dead:beef::/48 ipset:office
+  services: ssh http
+  ports: 8080/tcp 1000-2000/udp
+  protocols: esp
+  forward: yes
+  masquerade: yes
+  forward-ports:
+	port=80:proto=tcp:toport=8080
+	port=443:proto=tcp:toport=8443:toaddr=10.20.0.9
+  source-ports: 5353/udp
+  icmp-blocks: echo-request
+  rich rules:
+	rule family="ipv4" source address="10.20.0.0/16" service name="postgresql" log prefix="pg: " level="info" limit value="3/m" accept
+	rule family="ipv6" source address="fd00::/8" port port="8443" protocol="tcp" reject
+	rule family="ipv4" source address="192.0.2.7" drop
+	rule service name="dns" accept

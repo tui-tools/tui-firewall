@@ -1,0 +1,6 @@
+FedoraWorkstation (default)
+  interfaces: br-01 br-02 br-03 br-04 br-05 vpn2 vpn0 vpn4 vpn3 vpn1 eth0 wlan0
+docker
+  interfaces: br-10 br-11 br-12 br-13 br-14 br-06 br-09 br-07 br-08 docker0
+libvirt
+  interfaces: virbr2 virbr1 virbr0
