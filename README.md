@@ -2,6 +2,10 @@
 
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tui-tools/tui-firewall/badge)](https://scorecard.dev/viewer/?uri=github.com/tui-tools/tui-firewall)
 
+> **Beta.** The family is days old and still changing. Package names, flags
+> and keys may move without notice until 1.0. Pin versions, and report what
+> breaks.
+
 A terminal UI for the Linux firewall — **ufw** and **firewalld** — that shows
 the rules you actually have and **previews the exact command line of every
 change before running it**.
@@ -125,7 +129,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.2.1/tui-firewall_0.2.1_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.2.2/tui-firewall_0.2.2_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -533,6 +537,15 @@ backend-agnostic core that covers firewalld as well.
   here do not reload.
 - `tui-firewall` re-reads the firewall after every change, so what you see is
   what the system reports, not what the tool assumed.
+
+## Contributing
+
+Contributions are welcome as pull requests; the workflow, the commit style and
+the checks a change has to pass are described in the family's
+[CONTRIBUTING.md](https://github.com/tui-tools/tui-kit/blob/main/CONTRIBUTING.md).
+Security vulnerabilities go through the family's
+[SECURITY.md](https://github.com/tui-tools/tui-kit/blob/main/SECURITY.md)
+instead, never in a public issue.
 
 ## License
 
