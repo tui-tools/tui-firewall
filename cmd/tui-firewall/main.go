@@ -79,6 +79,7 @@ func (d *demoFlag) IsBoolFlag() bool { return true }
 type options struct {
 	demo        demoFlag
 	check       bool
+	report      bool
 	backend     string
 	themePath   string
 	sudo        string
@@ -99,6 +100,7 @@ func parseFlags(args []string, out *os.File) (options, error) {
 	fs.BoolVar(&opts.check, "check", false,
 		"read the firewall and print the parsed model as JSON, then exit "+
 			"(no UI, no changes); exit 1 if the backend cannot be read")
+	fs.BoolVar(&opts.report, "report", false, reportUsage)
 	fs.StringVar(&opts.backend, "backend", "",
 		"firewall backend: auto, ufw or firewalld (overrides the config file)")
 	fs.StringVar(&opts.themePath, "theme", "",
@@ -156,6 +158,25 @@ func run(args []string) error {
 		return err
 	}
 
+	// The configured theme is handed to the kit through the same variable the
+	// user could set by hand, so precedence stays in one place. It is set
+	// before the backend is built so --report can name the theme the UI would
+	// have used even on a machine where no backend can be.
+	if path := cfg.Theme(); path != "" {
+		if err := os.Setenv("TUI_THEME", path); err != nil {
+			return err
+		}
+	}
+
+	// --report is the non-interactive path that must work everywhere. It
+	// reads nothing privileged and it survives a machine with no firewall at
+	// all, because "there is no backend here" is one of the things a bug
+	// report has to be able to say. So it comes before the backend is
+	// required.
+	if opts.report {
+		return runReport(cfg, opts, os.Stdout)
+	}
+
 	backend, err := pickBackend(cfg, opts)
 	if err != nil {
 		return err
@@ -172,14 +193,6 @@ func run(args []string) error {
 	if opts.check {
 		return runCheck(backend, backendCompat, backends.Inspect(backend.Name()),
 			os.Stdout)
-	}
-
-	// The configured theme is handed to the kit through the same variable the
-	// user could set by hand, so precedence stays in one place.
-	if path := cfg.Theme(); path != "" {
-		if err := os.Setenv("TUI_THEME", path); err != nil {
-			return err
-		}
 	}
 
 	program := tea.NewProgram(newApp(backend, theme.New(), backendCompat),
