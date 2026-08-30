@@ -139,9 +139,7 @@ sudo install -m0755 bin/tui-firewall /usr/local/bin/tui-firewall
 
 Needs Go 1.26 or newer.
 
-The distribution packages are not published yet. The commands below are here so
-you know what they will be; a package repository at `pkgs.tui.tools` is what
-turns them on.
+Not packaged for these yet; the static binary works everywhere in the meantime.
 
 ### Arch Linux (AUR) — coming soon
 
