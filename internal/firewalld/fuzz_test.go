@@ -157,11 +157,15 @@ func FuzzParseRichRule(f *testing.F) {
 		default:
 			t.Fatalf("verdict = %q, not one firewalld prints", r.Verdict)
 		}
-		for name, part := range map[string]string{
-			"family": r.Family, "source": r.Source, "destination": r.Destination,
-			"service": r.Service, "port": r.Port, "protocol": r.Protocol,
-			"log prefix": r.LogPrefix,
+		// A slice of pairs rather than a map literal: govulncheck's SSA
+		// builder cannot lower a range over one.
+		for _, p := range []struct{ name, value string }{
+			{"family", r.Family}, {"source", r.Source},
+			{"destination", r.Destination}, {"service", r.Service},
+			{"port", r.Port}, {"protocol", r.Protocol},
+			{"log prefix", r.LogPrefix},
 		} {
+			name, part := p.name, p.value
 			if part == "" {
 				continue
 			}
