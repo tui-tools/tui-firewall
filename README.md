@@ -208,6 +208,7 @@ tui-firewall                      # drive the real firewall
 tui-firewall --demo               # sample ufw data, no privileges needed
 tui-firewall --demo=firewalld     # sample firewalld data
 tui-firewall --check              # read the firewall, print JSON, exit
+tui-firewall --report             # print what a bug report needs, exit
 tui-firewall --backend ufw        # skip autodetection
 tui-firewall --backend firewalld
 tui-firewall --theme ~/mytheme/colors.toml
@@ -248,6 +249,42 @@ would run a binary nobody asked this tool to touch.
 [tui-lab](https://github.com/tui-tools/tui-lab) uses it to test this tool
 against real firewalls on Ubuntu, Fedora and Omarchy Server; the assertions live
 in [`test/smoke.sh`](test/smoke.sh).
+
+### `--report`, for bug reports
+
+`--report` prints, in one block, everything a maintainer has to ask for
+otherwise: the tool and kit versions, the backend and the version probed off
+it, what the detector saw of the backend it did not choose, the distribution,
+the kernel, the terminal, the theme, the escalation prefix, and whether the
+running binary came from a package. It needs no privileges and reads no
+firewall, so it works on the machine where the bug is — including one where no
+backend can be selected at all, which is itself a thing worth reporting.
+
+```console
+$ tui-firewall --report
+tui-firewall 0.2.2 (kit v0.2.8)
+backend: firewalld 2.3.2
+mode: live
+distro: fedora 42 (Fedora Linux 42 (Workstation Edition))
+kernel: 6.19.14-108.fc42.x86_64
+arch: x86_64
+locale: en_US.UTF-8
+term: xterm-256color
+theme: tokyo-night
+sudo: sudo -n
+root: no
+binary: /usr/bin/tui-firewall (packaged)
+backends: ufw absent, firewalld active
+```
+
+The block is written to be published as it is: it carries no hostname, user
+name, home path or address, and no environment variable beyond `LANG`,
+`LC_ALL`, `TERM` and `TERM_PROGRAM`. A binary living under your home directory
+is reported as being there without naming the path. `--report` works with
+`--demo` too, where it says so on the `mode` line.
+
+The bug form asks for this block first — see
+[`.github/ISSUE_TEMPLATE/bug_report.yml`](.github/ISSUE_TEMPLATE/bug_report.yml).
 
 `tui-firewall` needs root to change anything, and to read anything on ufw. When
 it is not running as root it uses `sudo -n`, which never prompts: run `sudo -v`
