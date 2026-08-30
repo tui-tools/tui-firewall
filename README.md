@@ -26,7 +26,7 @@ firewalld.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.1.0/tui-firewall_0.1.0_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.2.0/tui-firewall_0.2.0_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -51,11 +51,34 @@ turns them on.
 Needs the tui-tools repository, which is a [one-time
 setup](https://tui-tools.github.io/install/).
 
+The one-liner detects the distribution and adds the repository and its signing
+key:
+
+```sh
+curl -fsSL https://pkgs.tui.tools/install.sh | sh
+```
+
+Piping a script into a shell is not this family's style, so here is the same
+setup by hand — read it, or read the script first with `curl -fsSL
+https://pkgs.tui.tools/install.sh -o install.sh`:
+
+```sh
+curl -fsSL -o /tmp/tui-tools.asc https://pkgs.tui.tools/pubkey.asc
+sudo pacman-key --add /tmp/tui-tools.asc
+sudo pacman-key --lsign-key \
+  "$(gpg --show-keys --with-colons /tmp/tui-tools.asc | awk -F: '/^fpr:/{print $10; exit}')"
+printf '[tui-tools]\nServer = https://pkgs.tui.tools/arch/$arch\n' \
+  | sudo tee -a /etc/pacman.conf
+sudo pacman -Sy
+```
+
+Then, and for every other tool in the family:
+
 ```sh
 sudo pacman -S tui-firewall
 ```
 
-Add the tui-tools repository to pacman.conf first.
+Upgrades then arrive with the rest of your system updates.
 
 ### Arch Linux (AUR) — coming soon
 
@@ -70,22 +93,63 @@ The -bin package installs the released static binary.
 Needs the tui-tools repository, which is a [one-time
 setup](https://tui-tools.github.io/install/).
 
+The one-liner detects the distribution and adds the repository and its signing
+key:
+
+```sh
+curl -fsSL https://pkgs.tui.tools/install.sh | sh
+```
+
+Piping a script into a shell is not this family's style, so here is the same
+setup by hand — read it, or read the script first with `curl -fsSL
+https://pkgs.tui.tools/install.sh -o install.sh`:
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://pkgs.tui.tools/pubkey.asc \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/tui-tools.gpg
+echo "deb [signed-by=/etc/apt/keyrings/tui-tools.gpg] https://pkgs.tui.tools/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/tui-tools.list
+sudo apt update
+```
+
+Then, and for every other tool in the family:
+
 ```sh
 sudo apt install tui-firewall
 ```
 
-Add the tui-tools apt repository and its keyring first.
+Upgrades then arrive with the rest of your system updates.
 
 ### Fedora and RHEL — coming soon
 
 Needs the tui-tools repository, which is a [one-time
 setup](https://tui-tools.github.io/install/).
 
+The one-liner detects the distribution and adds the repository and its signing
+key:
+
+```sh
+curl -fsSL https://pkgs.tui.tools/install.sh | sh
+```
+
+Piping a script into a shell is not this family's style, so here is the same
+setup by hand — read it, or read the script first with `curl -fsSL
+https://pkgs.tui.tools/install.sh -o install.sh`:
+
+```sh
+sudo rpm --import https://pkgs.tui.tools/pubkey.asc
+sudo curl -fsSL -o /etc/yum.repos.d/tui-tools.repo https://pkgs.tui.tools/rpm/tui-tools.repo
+sudo dnf makecache
+```
+
+Then, and for every other tool in the family:
+
 ```sh
 sudo dnf install tui-firewall
 ```
 
-Add the tui-tools.repo file first.
+Upgrades then arrive with the rest of your system updates.
 
 ### openSUSE — coming soon
 
@@ -96,7 +160,7 @@ setup](https://tui-tools.github.io/install/).
 sudo zypper install tui-firewall
 ```
 
-Add the tui-tools repository first.
+The rpm repository is shared with dnf; zypper support is not tested yet.
 
 ### Verify a download
 
