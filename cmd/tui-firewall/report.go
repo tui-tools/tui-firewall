@@ -9,6 +9,7 @@ import (
 
 	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
+	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/config"
 	"github.com/tui-tools/tui-kit/report"
 	"github.com/tui-tools/tui-kit/theme"
@@ -121,6 +122,11 @@ func describeNftables(cfg config.Config) string {
 	if management := nftables.DetectManagement(ruleset); management.Managed() {
 		parts = append(parts, "read-only: "+management.Detail)
 	}
+	// Staging is always available on this backend; a report says so, with the
+	// keep-confirmation window a batch would apply under, because "does this
+	// build have the atomic apply" is a question a bug report has to answer.
+	parts = append(parts, fmt.Sprintf("staging available (%.0fs keep window)",
+		staging.DefaultTimeout.Seconds()))
 	return strings.Join(parts, "; ")
 }
 

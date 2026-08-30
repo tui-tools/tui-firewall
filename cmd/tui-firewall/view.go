@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -122,6 +123,12 @@ func (a *app) headerView() string {
 	if a.backendCompat.Backend != "" {
 		facts = append(facts, ui.CompatFact(t, a.backendCompat))
 	}
+	// Staging is a mode the operator has to be able to see they are in: a change
+	// that was staged rather than applied, and a batch that is waiting to be
+	// kept, are both facts about the machine's near future.
+	if fact, ok := a.stagingFact(); ok {
+		facts = append(facts, fact)
+	}
 
 	// The group selector only makes sense when the backend has more than one
 	// group; ufw always has exactly one.
@@ -138,6 +145,27 @@ func (a *app) headerView() string {
 
 	return ui.Header{Title: "tui-firewall", Subtitle: subtitle, Facts: facts}.
 		Render(t, a.width)
+}
+
+// stagingFact renders the header fact for staging: whether it is on, how many
+// changes are pending, and whether an applied batch is waiting to be kept.
+func (a *app) stagingFact() (ui.Fact, bool) {
+	if a.staging == nil {
+		return ui.Fact{}, false
+	}
+	switch {
+	case a.awaitingKeep:
+		style := a.theme.Warn
+		return ui.Fact{Label: "staging", Value: "awaiting keep (k)", Style: &style}, true
+	case a.stagingOn:
+		style := a.theme.Warn
+		return ui.Fact{Label: "staging",
+			Value: fmt.Sprintf("on, %d pending", a.staging.Len()), Style: &style}, true
+	case a.staging.Len() > 0:
+		return ui.Fact{Label: "staging",
+			Value: fmt.Sprintf("%d pending", a.staging.Len())}, true
+	}
+	return ui.Fact{}, false
 }
 
 // loggingFactLabel names the logging fact the way the backend does, in the
@@ -362,6 +390,18 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 	if len(a.backend.Extras(a.model, a.group)) > 0 {
 		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
 	}
+	if a.awaitingKeep {
+		hints = append(hints, ui.KeyHint{Key: "k", Desc: "keep"})
+	} else if a.staging != nil {
+		desc := "stage"
+		if a.stagingOn {
+			desc = "staging on"
+		}
+		hints = append(hints, ui.KeyHint{Key: "s", Desc: desc})
+		if a.staging.Len() > 0 {
+			hints = append(hints, ui.KeyHint{Key: "S", Desc: "apply"})
+		}
+	}
 	return append(hints,
 		ui.KeyHint{Key: "/", Desc: "filter"},
 		ui.KeyHint{Key: "?", Desc: "help"},
@@ -385,6 +425,9 @@ func helpKeys() []ui.KeyHint {
 		{Key: "[ / ]", Desc: "previous / next group (multi-group backends)"},
 		{Key: "v", Desc: "pick a group: a firewalld zone, an nftables chain, NAT, aliases"},
 		{Key: "R", Desc: "reload the view from the firewall"},
+		{Key: "s", Desc: "toggle staging: collect changes instead of applying them (nftables)"},
+		{Key: "S", Desc: "review and apply the staged changes as one atomic transaction"},
+		{Key: "k", Desc: "keep an applied batch before its rollback timer fires"},
 		{Key: "?", Desc: "this help"},
 		{Key: "q", Desc: "quit"},
 		{Key: "", Desc: ""},

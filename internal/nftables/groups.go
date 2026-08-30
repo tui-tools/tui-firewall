@@ -186,7 +186,7 @@ func renderRule(rule Rule, direction firewall.Direction) firewall.Rule {
 		Extra: map[string]string{
 			firewall.ExtraInIface:  match.IIF,
 			firewall.ExtraOutIface: match.OIF,
-			firewall.ExtraDetail:   strings.Join(match.Unmodeled, "; "),
+			firewall.ExtraDetail:   ruleDetail(match),
 		},
 	}
 	if out.Action == "" && match.Log {
@@ -202,6 +202,21 @@ func renderRule(rule Rule, direction firewall.Direction) firewall.Rule {
 		out.Extra[firewall.ExtraTarget] = match.NAT.String()
 	}
 	return out
+}
+
+// ruleDetail renders the one-line note the flow table shows beside a rule: the
+// state match that makes it stateful, the ICMP type it narrows to, and then
+// whatever the columns had no room for.
+func ruleDetail(m Match) string {
+	parts := make([]string, 0, len(m.Unmodeled)+2)
+	if m.CTState != "" {
+		parts = append(parts, "ct state "+m.CTState)
+	}
+	if m.ICMPType != "" {
+		parts = append(parts, "icmp type "+m.ICMPType)
+	}
+	parts = append(parts, m.Unmodeled...)
+	return strings.Join(parts, "; ")
 }
 
 // actionOf maps an nft verdict onto the family's vocabulary where there is

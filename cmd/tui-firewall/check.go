@@ -10,6 +10,7 @@ import (
 	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
+	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/compat"
 )
 
@@ -84,6 +85,23 @@ type nftablesFacts struct {
 	// Writable lists the groups this backend would accept a rule in, which is
 	// the mutation guard reported rather than described.
 	Writable []string `json:"writable"`
+	// Staging reports the connectivity-safe apply: whether this backend offers
+	// it, and — in an interactive session — whether a batch is active.
+	Staging stagingFacts `json:"staging"`
+}
+
+// stagingFacts is the staging block of --check: staging is a mode of the
+// interactive session, so a non-interactive check reports the capability and a
+// zero batch, which is the honest answer for a path that never stages.
+type stagingFacts struct {
+	// Supported reports whether this backend can stage and roll back at all.
+	Supported bool `json:"supported"`
+	// Active reports whether a staging batch is open, and Pending how many
+	// changes it holds. Both are zero outside the interactive UI.
+	Active  bool `json:"active"`
+	Pending int  `json:"pending"`
+	// TimeoutSeconds is the keep-confirmation window a batch would apply under.
+	TimeoutSeconds int `json:"timeoutSeconds"`
 }
 
 // rulesetSource is the part of the nftables backends --check reads its extra
@@ -128,6 +146,14 @@ func collectNftablesFacts(backend firewall.Backend, model firewall.Model) *nftab
 			continue
 		}
 		facts.Writable = append(facts.Writable, group.Name)
+	}
+	// Staging is a property of the interactive session, which --check never
+	// starts; what it can report is whether this backend supports it and under
+	// what timeout a batch would apply.
+	_, supported := backend.(snapshotter)
+	facts.Staging = stagingFacts{
+		Supported:      supported,
+		TimeoutSeconds: int(staging.DefaultTimeout.Seconds()),
 	}
 	return facts
 }

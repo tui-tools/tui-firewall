@@ -91,6 +91,19 @@ func decodeMatch(m *Match, value any) string {
 	}
 	m.collectSets(right)
 
+	// A ct state match is what makes a rule stateful, and it reads back as a
+	// column of its own rather than as raw text: `ct state established,related`,
+	// the way nft spells the compact form.
+	if isCTStateMatch(obj["left"]) {
+		// The states go through the same one-line sanitising the raw rendering
+		// does, so the modelled value and the raw line cannot disagree about
+		// what the match says.
+		if states := oneLine(ctStateValues(obj["right"])); states != "" &&
+			setOnce(&m.CTState, states) {
+			return "ct state " + states
+		}
+	}
+
 	column := matchColumn(obj["left"])
 	// Only a plain equality lands in a column: a "!=" or a ">" in the source
 	// column would read as the opposite of what the rule does.
@@ -103,6 +116,48 @@ func decodeMatch(m *Match, value any) string {
 	rendered := strings.TrimSpace(left + " " + op + " " + right)
 	m.Unmodeled = append(m.Unmodeled, rendered)
 	return rendered
+}
+
+// isCTStateMatch reports whether a match's left operand is `ct state`.
+func isCTStateMatch(left any) bool {
+	obj, ok := left.(map[string]any)
+	if !ok {
+		return false
+	}
+	ct, ok := obj["ct"].(map[string]any)
+	if !ok {
+		return false
+	}
+	key, _ := ct["key"].(string)
+	return key == "state"
+}
+
+// ctStateValues renders the states of a ct state match as nft's compact form,
+// "established,related", whether nft printed one state, a JSON array or a set.
+func ctStateValues(right any) string {
+	switch value := right.(type) {
+	case string:
+		return value
+	case []any:
+		return joinStates(value)
+	case map[string]any:
+		if set, ok := value["set"].([]any); ok {
+			return joinStates(set)
+		}
+	}
+	return ""
+}
+
+// joinStates renders a list of state operands, comma-joined and with any
+// control characters already gone (each goes through renderOperand).
+func joinStates(items []any) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if s := renderOperand(item); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // matchColumn names the Match field a match expression's left operand feeds,

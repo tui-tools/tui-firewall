@@ -76,6 +76,12 @@ type Match struct {
 	OIF string `json:"oif,omitempty"`
 	// Proto is the layer 4 protocol ("tcp", "udp", "icmp", …).
 	Proto string `json:"proto,omitempty"`
+	// CTState is the connection-tracking state the rule matches, rendered the
+	// way nft spells it ("established,related"). It is what makes a rule
+	// stateful, and the column a router user reads first.
+	CTState string `json:"ctState,omitempty"`
+	// ICMPType is the ICMP message type the rule narrows to ("echo-request").
+	ICMPType string `json:"icmpType,omitempty"`
 	// Saddr and Daddr are the address selectors, "@name" for a set reference.
 	Saddr string `json:"saddr,omitempty"`
 	Daddr string `json:"daddr,omitempty"`

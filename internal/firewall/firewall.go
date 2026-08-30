@@ -334,6 +334,19 @@ type RuleSpec struct {
 	From    string
 	To      string
 	Comment string
+	// InIface and OutIface restrict the rule to an input or output interface.
+	// nftables matches them with iifname/oifname; backends that cannot express
+	// an interface match reject a non-empty value.
+	InIface  string
+	OutIface string
+	// CTStates lists the connection-tracking states the rule matches
+	// ("established", "related", "new", "invalid"). A stateful firewall reads
+	// these first; a backend that has no conntrack match rejects a non-empty
+	// value.
+	CTStates []string
+	// ICMPType, when Proto is "icmp" or "icmpv6", narrows the rule to one ICMP
+	// message type ("echo-request", …). It is ignored for any other protocol.
+	ICMPType string
 	// Family restricts the rule to one address family. Backends that cannot
 	// express it (ufw derives it from the addresses) reject a non-empty value.
 	Family Family
@@ -401,6 +414,16 @@ type Capabilities struct {
 	SupportsFamily bool
 	// SupportsLog reports whether RuleSpec.Log is honoured.
 	SupportsLog bool
+	// SupportsInterfaces reports whether RuleSpec.InIface and OutIface are
+	// honoured: an nftables rule can match the interface a packet arrived or
+	// leaves on, which is how a router says "SSH only from the LAN side".
+	SupportsInterfaces bool
+	// SupportsConntrack reports whether RuleSpec.CTStates is honoured: the
+	// established/related/new/invalid match a stateful firewall is built on.
+	SupportsConntrack bool
+	// SupportsICMP reports whether the protocol choice includes icmp and
+	// icmpv6 and RuleSpec.ICMPType is honoured.
+	SupportsICMP bool
 	// SupportsEnable reports whether the firewall can be turned on and off
 	// through this backend. firewalld cannot: it is a system service, and
 	// starting services is not this tool's job.

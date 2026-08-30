@@ -327,20 +327,24 @@ func TestParseRulesetRuleColumns(t *testing.T) {
 	}
 }
 
-func TestParseRulesetKeepsUnmodeledExpressions(t *testing.T) {
-	// A ct state match has no column, and dropping it would show a rule that
-	// matches everything where the real rule matches established traffic.
+func TestParseRulesetModelsCTState(t *testing.T) {
+	// A ct state match is what makes a rule stateful; it reads back into a
+	// column of its own so the UI can show "established,related" rather than
+	// letting the match fall into the raw line unmodeled.
 	rule, ok := findRuleByComment(parseFixture(t, "router"), "input", "keep state")
 	if !ok {
 		t.Fatal("the keep-state rule is missing")
 	}
-	if len(rule.Match.Unmodeled) != 1 {
-		t.Fatalf("Unmodeled = %v, want exactly the ct state match", rule.Match.Unmodeled)
+	if rule.Match.CTState != "established,related" {
+		t.Errorf("CTState = %q, want established,related", rule.Match.CTState)
 	}
-	if !strings.Contains(rule.Match.Unmodeled[0], "ct state") {
-		t.Errorf("Unmodeled = %q, want the ct state match", rule.Match.Unmodeled[0])
+	for _, u := range rule.Match.Unmodeled {
+		if strings.Contains(u, "ct state") {
+			t.Errorf("the ct state match is modeled, so it should not also be "+
+				"unmodeled: %q", u)
+		}
 	}
-	if !strings.Contains(rule.Raw, "ct state") {
+	if !strings.Contains(rule.Raw, "ct state established,related") {
 		t.Errorf("Raw = %q, want the ct state match in it", rule.Raw)
 	}
 }

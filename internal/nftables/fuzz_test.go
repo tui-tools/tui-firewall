@@ -1,6 +1,7 @@
 package nftables
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -264,6 +265,17 @@ func FuzzDecodeExprs(f *testing.F) {
 		`[{"match":{"left":{"payload":{"protocol":"ip","field":"saddr"}},` +
 			`"right":"@a"}},{"match":{"left":{"payload":{"protocol":"tcp",` +
 			`"field":"dport"}},"right":{"set":["@b","@c"]}}}]`,
+		// The ct state and ICMP shapes phase 2 models: an array of states, a
+		// single state, a set of states, and an ICMP type match.
+		`[{"match":{"op":"in","left":{"ct":{"key":"state"}},` +
+			`"right":["established","related"]}}]`,
+		`[{"match":{"op":"==","left":{"ct":{"key":"state"}},"right":"new"}}]`,
+		`[{"match":{"op":"in","left":{"ct":{"key":"state"}},` +
+			`"right":{"set":["established","related","new"]}}}]`,
+		`[{"match":{"left":{"ct":{"key":"state"}},"right":null}}]`,
+		`[{"match":{"left":{"payload":{"protocol":"icmp","field":"type"}},` +
+			`"right":"echo-request"}},{"match":{"left":{"payload":` +
+			`{"protocol":"ip","field":"protocol"}},"right":"icmp"}}]`,
 	} {
 		f.Add([]byte(shape))
 	}
@@ -295,6 +307,18 @@ func FuzzDecodeExprs(f *testing.F) {
 			}
 			if !strings.Contains(raw, "@"+name) {
 				t.Fatalf("set %q is counted but not in the raw line %q", name, raw)
+			}
+		}
+		// A modelled ct state is a single-line cell and is visible in the raw
+		// line, the way every other column is: what the count and the columns
+		// show has to be what the detail line shows.
+		if match.CTState != "" {
+			if strings.ContainsAny(match.CTState, "\n\r") {
+				t.Fatalf("ct state spans lines: %q", match.CTState)
+			}
+			if !strings.Contains(raw, "ct state "+match.CTState) {
+				t.Fatalf("ct state %q is modelled but not in the raw line %q",
+					match.CTState, raw)
 			}
 		}
 		// A NAT statement and a verdict are the same decision; they cannot
@@ -455,6 +479,117 @@ func FuzzBuildRuleCommand(f *testing.F) {
 		// Every rule this backend writes counts, and every rule decides.
 		if !containsWord(argv, "counter") {
 			t.Fatalf("no counter in %q", argv)
+		}
+	})
+}
+
+// FuzzBuildFlowRule is the phase-2 half of the builder fuzz: the router-shaped
+// matches (interface, connection state, ICMP) become nft argv words. The same
+// injection guard the port and address path has must hold for these, because
+// they carry text the user typed just as directly.
+func FuzzBuildFlowRule(f *testing.F) {
+	seeds := [][]string{
+		{"lan0", "wan0", "established,related", "tcp", ""},
+		{"", "", "new", "icmp", "echo-request"},
+		{"wan0; drop", "", "", "", ""},
+		{"", "", "established,\ndrop", "", ""},
+		{"eth0", "eth1", "invalid", "icmpv6", "nd-router-advert"},
+		{"", "", "", "esp", ""},
+		{"", "", "", "icmp", "\"bad\""},
+	}
+	for _, seed := range seeds {
+		f.Add(seed[0], seed[1], seed[2], seed[3], seed[4])
+	}
+
+	ruleset, err := ParseRuleset(mustReadSeedBytes(f, "router"))
+	if err != nil {
+		f.Fatalf("reading the router fixture: %v", err)
+	}
+	chain, ok := ruleset.Chain(OwnTable, "input")
+	if !ok {
+		f.Fatal("the router fixture has no input chain")
+	}
+
+	f.Fuzz(func(t *testing.T, iif, oif, ctstate, proto, icmpType string) {
+		var states []string
+		if ctstate != "" {
+			states = strings.Split(ctstate, ",")
+		}
+		change, err := ruleset.BuildAddRule(chain, firewall.RuleSpec{
+			Action:   firewall.ActionAllow,
+			InIface:  iif,
+			OutIface: oif,
+			CTStates: states,
+			Proto:    proto,
+			ICMPType: icmpType,
+		})
+		if err != nil {
+			return
+		}
+		if len(change.Commands) != 1 {
+			t.Fatalf("a flow rule is one command, got %d", len(change.Commands))
+		}
+		argv := change.Commands[0].Argv
+		for i, word := range argv {
+			if strings.ContainsAny(word, "\n\r") {
+				t.Fatalf("argv[%d] = %q spans lines", i, word)
+			}
+			// An interface name is the one operand quoted here; inside those
+			// quotes a stray character is text, and nowhere else may syntax slip
+			// through.
+			quoted := strings.HasPrefix(word, "\"") && strings.HasSuffix(word, "\"") &&
+				strings.Count(word, "\"") == 2 && len(word) >= 2
+			switch {
+			case quoted, structuralWords[word]:
+			case strings.ContainsAny(word, ";\"'{}\\"):
+				t.Fatalf("argv[%d] = %q carries nft syntax", i, word)
+			}
+		}
+		if !containsWord(argv, "counter") {
+			t.Fatalf("no counter in %q", argv)
+		}
+	})
+}
+
+// FuzzFakeApplyScript feeds arbitrary bytes to the demo's batch path, which is
+// the tokenizer and the statement applier the staging flow runs in --demo. What
+// it must never do is panic or leave the in-memory ruleset in a shape the model
+// cannot render — a batch that fails is undone, not half-applied.
+func FuzzFakeApplyScript(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"flush ruleset",
+		"add rule inet tui input tcp dport 22 counter accept",
+		"add rule inet tui input iifname \"wan0\" ct state established,related counter accept",
+		"flush ruleset\nadd table inet tui\nadd chain inet tui input { type filter hook input priority 0 ; policy drop ; }",
+		"{\"tables\":[{\"family\":\"inet\",\"name\":\"tui\"}]}",
+		"delete table inet tui",
+		"garbage that is not a statement at all",
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		fake := NewFake()
+		// A batch either applies whole or leaves the ruleset untouched; either
+		// way the result must be a ruleset the model can render.
+		_, _ = fake.Run(context.Background(),
+			firewall.One(firewall.Command{Argv: []string{"nft", "-f", "-"}, Stdin: string(data)}))
+		ruleset := fake.Ruleset()
+		model := Model(ruleset)
+		for _, group := range model.Groups {
+			if group.Name == "" {
+				t.Fatal("a batch left a group with no name")
+			}
+		}
+		// countReferences must have stayed consistent: no negative counts.
+		for _, table := range ruleset.Tables {
+			for _, set := range table.Sets {
+				if set.References < 0 {
+					t.Fatalf("set %s has %d references after a batch",
+						set.Name, set.References)
+				}
+			}
 		}
 	})
 }

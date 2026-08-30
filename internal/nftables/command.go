@@ -22,12 +22,15 @@ var capabilities = firewall.Capabilities{
 	Actions: []firewall.Action{
 		firewall.ActionAllow, firewall.ActionDeny, firewall.ActionReject,
 	},
-	Policies:         []firewall.Policy{firewall.PolicyAllow, firewall.PolicyDeny},
-	SupportsInsert:   true,
-	SupportsComments: true,
-	SupportsFamily:   true,
-	SupportsLog:      true,
-	SupportsEnable:   false,
+	Policies:           []firewall.Policy{firewall.PolicyAllow, firewall.PolicyDeny},
+	SupportsInsert:     true,
+	SupportsComments:   true,
+	SupportsFamily:     true,
+	SupportsLog:        true,
+	SupportsInterfaces: true,
+	SupportsConntrack:  true,
+	SupportsICMP:       true,
+	SupportsEnable:     false,
 	EnableHint: "nftables has no on/off switch: change a chain policy with p, " +
 		"or load and flush the ruleset with your own nft commands",
 	SupportsLogging: false,
@@ -176,7 +179,22 @@ func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, 
 	}
 
 	var expr []string
-	family, err := addressFamily(chain, spec.Family, source, spec.To)
+	// Interface matches lead the rule, the way nft prints them, so "SSH only
+	// from the LAN side" reads left to right.
+	ifaces, err := interfaceSelectors(spec.InIface, spec.OutIface)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, ifaces...)
+	// The conntrack state comes next: a stateful rule is read "established,
+	// related first, then what it lets through".
+	ctState, err := ctStateSelector(spec.CTStates)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, ctState...)
+
+	family, err := r.addressFamily(chain, spec.Family, source, spec.To)
 	if err != nil {
 		return nil, err
 	}
@@ -194,15 +212,16 @@ func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, 
 		}
 		expr = append(expr, selector...)
 	}
-	ports, err := portSelector(spec.Proto, spec.Ports)
+	l4, err := protoSelector(chain, spec.Proto, spec.Ports, spec.ICMPType)
 	if err != nil {
 		return nil, err
 	}
-	expr = append(expr, ports...)
+	expr = append(expr, l4...)
 	if len(expr) == 0 {
 		return nil, errorf(
-			"give at least a port, an address or an alias: a rule with no " +
-				"match at all applies to every packet the chain sees")
+			"give at least a port, an address, an alias, an interface, a " +
+				"protocol or a connection state: a rule with no match at all " +
+				"applies to every packet the chain sees")
 	}
 
 	if spec.Log {
@@ -223,7 +242,13 @@ func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, 
 // an `inet` table both families share one chain, so an address match has to
 // say which one it means; in an `ip` or `ip6` table the table has already
 // said it.
-func addressFamily(chain Chain, requested firewall.Family, from, to string) (string, error) {
+//
+// When the family was not asked for, it is read off the operands themselves:
+// a literal address carries its family, and an alias carries it in the set's
+// own element type (ipv4_addr → ip, ipv6_addr → ip6). Only a rule whose only
+// address operand is a port set or a concatenation — neither of which names a
+// family — still has to be told.
+func (r Ruleset) addressFamily(chain Chain, requested firewall.Family, from, to string) (string, error) {
 	switch chain.Table.Family {
 	case "ip":
 		return "ip", nil
@@ -236,21 +261,153 @@ func addressFamily(chain Chain, requested firewall.Family, from, to string) (str
 	case firewall.FamilyIPv6:
 		return "ip6", nil
 	}
-	// Nothing was asked for: read it off the addresses themselves.
-	for _, address := range []string{from, to} {
-		switch inferFamily(address) {
-		case firewall.FamilyIPv6:
-			return "ip6", nil
-		case firewall.FamilyIPv4:
-			return "ip", nil
+	// Nothing was asked for: read it off the operands. A rule that mixes a v4
+	// and a v6 operand cannot be one address match, and saying so beats letting
+	// nft reject the second half.
+	seen := firewall.FamilyAny
+	for _, operand := range []string{from, to} {
+		f := r.operandFamily(chain.Table, operand)
+		if f == firewall.FamilyAny {
+			continue
 		}
+		if seen != firewall.FamilyAny && seen != f {
+			return "", errorf(
+				"this rule matches a v4 operand and a v6 one, which is two "+
+					"rules; %q and %q cannot share one", from, to)
+		}
+		seen = f
+	}
+	switch seen {
+	case firewall.FamilyIPv6:
+		return "ip6", nil
+	case firewall.FamilyIPv4:
+		return "ip", nil
 	}
 	if from == "" && to == "" {
 		return "", nil
 	}
 	return "", errorf(
-		"table %s holds both address families, so an alias needs the family "+
-			"field set to v4 or v6", chain.Table)
+		"table %s holds both address families, so an alias of ports or a "+
+			"concatenation needs the family field set to v4 or v6", chain.Table)
+}
+
+// operandFamily reads the address family off one operand: a set's own element
+// type when it is an alias, the literal's family otherwise.
+func (r Ruleset) operandFamily(table TableID, operand string) firewall.Family {
+	if name, ok := strings.CutPrefix(operand, "@"); ok {
+		if set, found := r.Set(table, name); found {
+			switch set.Type {
+			case "ipv4_addr":
+				return firewall.FamilyIPv4
+			case "ipv6_addr":
+				return firewall.FamilyIPv6
+			}
+		}
+		return firewall.FamilyAny
+	}
+	return inferFamily(operand)
+}
+
+// interfaceSelectors renders `iifname "wan0"` and `oifname "lan0"`. nft matches
+// an interface by name with iifname/oifname, which — unlike iif/oif — do not
+// need the interface to exist when the rule is written.
+func interfaceSelectors(in, out string) ([]string, error) {
+	var expr []string
+	for _, iface := range []struct {
+		keyword string
+		value   string
+	}{{"iifname", in}, {"oifname", out}} {
+		if iface.value == "" {
+			continue
+		}
+		if err := checkOperand(iface.value); err != nil {
+			return nil, err
+		}
+		expr = append(expr, iface.keyword, quote(iface.value))
+	}
+	return expr, nil
+}
+
+// ctStates are the connection-tracking states nft accepts. untracked is left
+// out of the form on purpose: it means "no conntrack entry", which is a rule
+// for a machine that has turned conntrack off, not the stateful firewall the
+// form is for.
+var ctStates = []string{"established", "related", "new", "invalid"}
+
+// ctStateSelector renders `ct state established,related`. The states are joined
+// with a comma into one operand, which is nft's own spelling for a set of
+// states, so the preview reads exactly like the rule the list shows afterwards.
+func ctStateSelector(states []string) ([]string, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	ordered := make([]string, 0, len(states))
+	for _, state := range states {
+		state = strings.TrimSpace(state)
+		if state == "" {
+			continue
+		}
+		if !contains(ctStates, state) {
+			return nil, errorf("a connection state is one of %s, not %q",
+				strings.Join(ctStates, ", "), state)
+		}
+		if seen[state] {
+			continue
+		}
+		seen[state] = true
+		ordered = append(ordered, state)
+	}
+	if len(ordered) == 0 {
+		return nil, nil
+	}
+	return []string{"ct", "state", strings.Join(ordered, ",")}, nil
+}
+
+// protoSelector renders the layer-4 match: a port for tcp and udp, the ICMP
+// forms for icmp and icmpv6, and `meta l4proto` for anything else with no port.
+func protoSelector(chain Chain, proto, ports, icmpType string) ([]string, error) {
+	switch proto {
+	case "icmp", "icmpv6":
+		return icmpSelector(chain, proto, ports, icmpType)
+	}
+	if icmpType != "" {
+		return nil, errorf("an ICMP type only applies to the icmp and icmpv6 protocols")
+	}
+	return portSelector(proto, ports)
+}
+
+// icmpSelector renders `ip protocol icmp` / `ip6 nexthdr ipv6-icmp`, with an
+// optional `icmp type echo-request`. The header word is the family's own, so
+// the match is refused in a table of the other family rather than accepted and
+// then rejected by nft.
+func icmpSelector(chain Chain, proto, ports, icmpType string) ([]string, error) {
+	if ports != "" {
+		return nil, errorf("%s carries no port; leave the port field empty", proto)
+	}
+	var expr []string
+	var typeKeyword string
+	switch proto {
+	case "icmp":
+		if family := chain.Table.Family; family == "ip6" {
+			return nil, errorf(
+				"icmp is the v4 protocol; table %s is v6, so use icmpv6", chain.Table)
+		}
+		expr, typeKeyword = []string{"ip", "protocol", "icmp"}, "icmp"
+	case "icmpv6":
+		if family := chain.Table.Family; family == "ip" {
+			return nil, errorf(
+				"icmpv6 is the v6 protocol; table %s is v4, so use icmp", chain.Table)
+		}
+		expr, typeKeyword = []string{"ip6", "nexthdr", "ipv6-icmp"}, "icmpv6"
+	}
+	if icmpType != "" {
+		if err := checkOperand(icmpType); err != nil {
+			return nil, err
+		}
+		expr = append(expr, typeKeyword, "type", icmpType)
+	}
+	return expr, nil
 }
 
 // inferFamily reads an address family off a literal address or prefix.
@@ -523,8 +680,10 @@ func (r Ruleset) buildElement(table TableID, name, element, verb string) (firewa
 }
 
 // BuildMasquerade adds a masquerade rule for an outgoing interface: every
-// packet leaving through it is rewritten to the router's own address.
-func (r Ruleset) BuildMasquerade(chain Chain, iface string) (firewall.Change, error) {
+// packet leaving through it is rewritten to the router's own address. An
+// optional source network scopes it to one subnet, so a router that
+// masquerades one LAN and routes another cleanly does not have to.
+func (r Ruleset) BuildMasquerade(chain Chain, iface, source string) (firewall.Change, error) {
 	if err := r.checkNATChain(chain, "postrouting"); err != nil {
 		return firewall.Change{}, err
 	}
@@ -533,11 +692,101 @@ func (r Ruleset) BuildMasquerade(chain Chain, iface string) (firewall.Change, er
 	}
 	argv := []string{"nft", "add", "rule"}
 	argv = append(argv, chain.Table.Args()...)
-	argv = append(argv, chain.Name, "oifname", quote(iface), "counter",
-		"masquerade", "comment", quote("masquerade out "+iface))
+	comment := "masquerade out " + iface
+	if source != "" {
+		family, err := r.addressFamily(chain, "", source, "")
+		if err != nil {
+			return firewall.Change{}, err
+		}
+		selector, err := addressSelector(family, "saddr", source)
+		if err != nil {
+			return firewall.Change{}, err
+		}
+		argv = append(argv, chain.Name)
+		argv = append(argv, selector...)
+		argv = append(argv, "oifname", quote(iface))
+		comment = "masquerade " + source + " out " + iface
+	} else {
+		argv = append(argv, chain.Name, "oifname", quote(iface))
+	}
+	argv = append(argv, "counter", "masquerade", "comment", quote(comment))
+	description := "Masquerade everything leaving " + iface
+	if source != "" {
+		description = "Masquerade " + source + " leaving " + iface
+	}
 	return firewall.One(firewall.Command{
 		Argv:        argv,
-		Description: "Masquerade everything leaving " + iface,
+		Description: description,
+		Destructive: true,
+	}), nil
+}
+
+// BuildDeleteChain removes a chain of the table this tool owns. nft refuses to
+// delete a chain that still holds rules, so a chain with rules is refused here
+// too — with the count, so the user knows what they would be dropping — unless
+// the caller has already confirmed the cascade with force.
+func (r Ruleset) BuildDeleteChain(chain Chain, force bool) (firewall.Change, error) {
+	if err := r.checkOwnTable(chain.Table); err != nil {
+		return firewall.Change{}, err
+	}
+	found, ok := r.Chain(chain.Table, chain.Name)
+	if !ok {
+		return firewall.Change{}, errorf("table %s has no chain %s",
+			chain.Table, chain.Name)
+	}
+	var commands []firewall.Command
+	note := ""
+	if len(found.Rules) > 0 {
+		if !force {
+			return firewall.Change{}, errorf(
+				"chain %s still holds %s; delete those first, or confirm the "+
+					"cascade", chain.Name, plural(len(found.Rules), "rule"))
+		}
+		// nft will not delete a chain with rules in it, so a forced delete
+		// flushes the chain first. Both lines are shown; both run in order.
+		flush := []string{"nft", "flush", "chain"}
+		flush = append(flush, chain.Table.Args()...)
+		flush = append(flush, chain.Name)
+		commands = append(commands, firewall.Command{
+			Argv:        flush,
+			Description: "Flush the rules of " + chain.Name,
+			Destructive: true,
+		})
+		note = "the chain holds " + plural(len(found.Rules), "rule") +
+			", flushed first because nft will not delete a chain that has any"
+	}
+	del := []string{"nft", "delete", "chain"}
+	del = append(del, chain.Table.Args()...)
+	del = append(del, chain.Name)
+	commands = append(commands, firewall.Command{
+		Argv:        del,
+		Description: "Delete chain " + chain.Name + " from " + chain.Table.String(),
+		Destructive: true,
+	})
+	return firewall.Change{
+		Description: "Delete chain " + chain.Name,
+		Destructive: true,
+		Commands:    commands,
+		Note:        note,
+	}, nil
+}
+
+// BuildDeleteTable drops the whole table this tool owns, with every chain, set
+// and rule in it. It is refused for any other table: a table this backend did
+// not create is one it reads and never removes.
+func (r Ruleset) BuildDeleteTable(id TableID) (firewall.Change, error) {
+	if err := r.checkOwnTable(id); err != nil {
+		return firewall.Change{}, err
+	}
+	if _, ok := r.Table(id); !ok {
+		return firewall.Change{}, errorf("there is no table %s to delete", id)
+	}
+	argv := []string{"nft", "delete", "table"}
+	argv = append(argv, id.Args()...)
+	return firewall.One(firewall.Command{
+		Argv: argv,
+		Description: "Delete table " + id.String() +
+			" and everything in it",
 		Destructive: true,
 	}), nil
 }

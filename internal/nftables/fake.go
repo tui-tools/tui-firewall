@@ -3,6 +3,7 @@ package nftables
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,12 +125,33 @@ func (f *Fake) runOne(cmd firewall.Command) (string, error) {
 		return "", errorf("empty command")
 	}
 
+	// `nft -f -` is the one batch form: the whole staged transaction, or a
+	// snapshot restore, arrives on standard input. The demo applies it so
+	// staging behaves in --demo exactly as it does against a real nft.
+	if args[0] == "-f" {
+		return f.applyScript(cmd.Stdin)
+	}
+	return f.applyStatement(args)
+}
+
+// applyStatement dispatches one nft statement (the argv with the leading "nft"
+// already stripped). It is shared by the single-command path and the batch
+// path, so a staged change and its immediate-apply twin take the same route
+// through the in-memory ruleset.
+func (f *Fake) applyStatement(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", errorf("empty statement")
+	}
 	verb := args[0]
 	rest := args[1:]
-	// `nft chain <family> <table> <name> { policy … }` has no verb of its own:
+	// `chain <family> <table> <name> { policy … }` has no verb of its own:
 	// naming an object that already exists is how nft spells a change to it.
 	if verb == "chain" {
 		return f.setPolicy(rest)
+	}
+	if verb == "flush" && len(rest) > 0 && rest[0] == "ruleset" {
+		f.ruleset = Ruleset{}
+		return "ruleset flushed", nil
 	}
 	if len(rest) == 0 {
 		return "", errorf("%q needs something to act on", verb)
@@ -149,6 +171,12 @@ func (f *Fake) runOne(cmd firewall.Command) (string, error) {
 		return f.addSet(operands)
 	case "delete set":
 		return f.deleteSet(operands)
+	case "delete chain":
+		return f.deleteChain(operands)
+	case "flush chain":
+		return f.flushChain(operands)
+	case "delete table":
+		return f.deleteTable(operands)
 	case "add element":
 		return f.changeElement(operands, true)
 	case "delete element":
@@ -156,6 +184,87 @@ func (f *Fake) runOne(cmd firewall.Command) (string, error) {
 	default:
 		return "", errorf("%s %s is not something the demo applies", verb, object)
 	}
+}
+
+// SnapshotRuleset serialises the in-memory ruleset so the demo can restore it
+// on a staged rollback. It is JSON rather than nft text — the demo has no nft
+// to print human syntax — and the batch path below reads it back. The real
+// backend captures nft's own text instead, which is what a real rollback needs.
+func (f *Fake) SnapshotRuleset(_ context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, err := json.Marshal(f.ruleset)
+	if err != nil {
+		return "", errorf("snapshotting the demo ruleset: %v", err)
+	}
+	return string(data), nil
+}
+
+// applyScript applies a batch that arrived on standard input: the staged
+// transaction, or a snapshot restore. A `flush ruleset` line empties the state;
+// a JSON object is a snapshot to load whole; anything else is one nft statement.
+// nft is all-or-nothing, so the batch is applied to a copy that only replaces
+// the live ruleset if every line succeeded.
+func (f *Fake) applyScript(stdin string) (string, error) {
+	original := f.ruleset
+	applied := 0
+	for _, line := range strings.Split(stdin, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "flush ruleset" {
+			f.ruleset = Ruleset{}
+			continue
+		}
+		if strings.HasPrefix(line, "{") {
+			var restored Ruleset
+			if err := json.Unmarshal([]byte(line), &restored); err != nil {
+				f.ruleset = original
+				return "", errorf("restoring the snapshot: %v", err)
+			}
+			restored.countReferences()
+			f.ruleset = restored
+			applied++
+			continue
+		}
+		if _, err := f.applyStatement(tokenizeScript(line)); err != nil {
+			// All-or-nothing: a rejected line undoes the whole batch, the way
+			// nft -f would have left the ruleset untouched.
+			f.ruleset = original
+			return "", err
+		}
+		applied++
+	}
+	return "batch of " + strconv.Itoa(applied) + " applied atomically", nil
+}
+
+// tokenizeScript splits one nft script line into the words the statement
+// handlers expect, keeping a double-quoted run — a comment, an interface name —
+// as a single word the way the argv builders produced it.
+func tokenizeScript(line string) []string {
+	var words []string
+	var current strings.Builder
+	inQuote := false
+	flush := func() {
+		if current.Len() > 0 {
+			words = append(words, current.String())
+			current.Reset()
+		}
+	}
+	for _, r := range line {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			current.WriteRune(r)
+		case r == ' ' && !inQuote:
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return words
 }
 
 // take reads the family, table and remaining operands off an argv tail.
@@ -389,6 +498,71 @@ func (f *Fake) deleteSet(operands []string) (string, error) {
 	return "", errorf("table %s has no set %s", id, rest[0])
 }
 
+// deleteChain removes a chain of a table. nft refuses one that still holds
+// rules, and so does the builder, so a chain that reaches here empty is the
+// normal case; a forced delete flushes it first, which the fake sees as a
+// separate command.
+func (f *Fake) deleteChain(operands []string) (string, error) {
+	id, rest, err := take(operands)
+	if err != nil {
+		return "", err
+	}
+	table, err := f.table(id)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) == 0 {
+		return "", errorf("a chain needs a name")
+	}
+	for i, chain := range table.Chains {
+		if chain.Name != rest[0] {
+			continue
+		}
+		if len(chain.Rules) > 0 {
+			return "", errorf("chain %s still holds %d rules",
+				chain.Name, len(chain.Rules))
+		}
+		table.Chains = append(table.Chains[:i], table.Chains[i+1:]...)
+		return "chain " + rest[0] + " deleted", nil
+	}
+	return "", errorf("table %s has no chain %s", id, rest[0])
+}
+
+// flushChain empties a chain, the way `nft flush chain` does.
+func (f *Fake) flushChain(operands []string) (string, error) {
+	id, rest, err := take(operands)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) == 0 {
+		return "", errorf("a chain needs a name")
+	}
+	chain, err := f.chain(id, rest[0])
+	if err != nil {
+		return "", err
+	}
+	chain.Rules = nil
+	f.ruleset.countReferences()
+	return "chain " + rest[0] + " flushed", nil
+}
+
+// deleteTable drops a whole table with everything in it.
+func (f *Fake) deleteTable(operands []string) (string, error) {
+	id, _, err := take(operands)
+	if err != nil {
+		return "", err
+	}
+	for i := range f.ruleset.Tables {
+		if f.ruleset.Tables[i].TableID != id {
+			continue
+		}
+		f.ruleset.Tables = append(f.ruleset.Tables[:i], f.ruleset.Tables[i+1:]...)
+		f.ruleset.countReferences()
+		return "table " + id.String() + " deleted", nil
+	}
+	return "", errorf("no table %s", id)
+}
+
 // changeElement adds or removes one member of a set.
 func (f *Fake) changeElement(operands []string, add bool) (string, error) {
 	id, rest, err := take(operands)
@@ -475,6 +649,25 @@ func matchFromArgs(args []string) (Match, string) {
 			}
 		case "l4proto":
 			m.Proto = value(i)
+		case "protocol":
+			// `ip protocol icmp`: the header word before it was ip.
+			m.Proto = value(i)
+		case "nexthdr":
+			// `ip6 nexthdr ipv6-icmp` is how nft spells icmpv6 in a v6 header.
+			if value(i) == "ipv6-icmp" {
+				m.Proto = "icmpv6"
+			} else {
+				m.Proto = value(i)
+			}
+		case "state":
+			if i > 0 && args[i-1] == "ct" {
+				m.CTState = value(i)
+			}
+		case "type":
+			// `icmp type echo-request` / `icmpv6 type echo-request`.
+			if i > 0 && (args[i-1] == "icmp" || args[i-1] == "icmpv6") {
+				m.ICMPType = value(i)
+			}
 		case "counter":
 			m.Counter = &Counter{}
 		case "log":

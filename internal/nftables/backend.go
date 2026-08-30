@@ -104,6 +104,14 @@ func (r *Real) Run(ctx context.Context, change firewall.Change) (string, error) 
 	return firewall.RunChange(ctx, r.run, change)
 }
 
+// SnapshotRuleset reads the whole ruleset as nft's own text, which is what the
+// connectivity-safe rollback replays. It is `nft list ruleset` (not the JSON
+// form): the human text is a valid nft script, so `nft -f` can load it straight
+// back, which the JSON cannot. Like every nft read it needs privilege.
+func (r *Real) SnapshotRuleset(ctx context.Context) (string, error) {
+	return r.run.Read(ctx, "nft", "list", "ruleset")
+}
+
 // BuildAddRule creates a rule in the chain the group names.
 func (r *Real) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Change, error) {
 	return r.Ruleset().AddRule(group, spec)

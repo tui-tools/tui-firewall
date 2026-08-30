@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/compat"
 	"github.com/tui-tools/tui-kit/theme"
 	"github.com/tui-tools/tui-kit/ui"
@@ -39,6 +40,8 @@ const (
 	pickerGroup
 	pickerExtra
 	pickerExtraStep
+	pickerStagingAction
+	pickerStagingDrop
 )
 
 // app is the tui-firewall Bubble Tea model.
@@ -75,6 +78,25 @@ type app struct {
 	// extras is the action list the menu was built from, so a choice can be
 	// matched back to the action it names.
 	extras []firewall.Extra
+
+	// staging holds the pending-changes set and the atomic-apply lifecycle. It
+	// is only reachable on a backend that can snapshot its ruleset (nftables);
+	// snap is that backend, or nil.
+	staging   *staging.Session
+	snap      snapshotter
+	stagingOn bool
+	// awaitingKeep reports that a staged batch was applied and is waiting for
+	// the operator to confirm they still have access before it rolls back.
+	awaitingKeep bool
+	// keepToken guards the rollback timer against a stale tick: only the tick
+	// carrying the current token may fire the rollback.
+	keepToken int
+	// pendingApply marks the change now at the confirm dialog as the staged
+	// batch, so a yes arms the keep timer instead of just reporting success.
+	pendingApply bool
+	// keepTickPending asks the next load to start the rollback countdown, so
+	// the applied batch is on screen before its keep window begins.
+	keepTickPending bool
 
 	status     string
 	statusKind ui.StatusKind
@@ -124,6 +146,13 @@ func newApp(backend firewall.Backend, th theme.Theme,
 	// a comparison written here.
 	if !backendCompat.Caps().Has("rule-comments") {
 		a.caps.SupportsComments = false
+	}
+	// Staging is offered only where a rollback is possible: a backend that can
+	// snapshot its own ruleset. That is the nftables backend and its demo; ufw
+	// and firewalld apply through their own daemons and have no such snapshot.
+	if snap, ok := backend.(snapshotter); ok {
+		a.snap = snap
+		a.staging = staging.New(0)
 	}
 	if th.Warning != "" {
 		a.setStatus(ui.StatusWarn, th.Warning)
@@ -188,13 +217,36 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.group = a.model.Groups[0].Name
 		}
 		a.applyFilter()
+		// A batch that just applied starts its keep window now, with the applied
+		// ruleset already on screen, so the operator sees what they are keeping.
+		if a.keepTickPending && a.staging != nil {
+			a.keepTickPending = false
+			token := a.keepToken
+			timeout := a.staging.Timeout()
+			return a, tea.Tick(timeout, func(time.Time) tea.Msg {
+				return keepExpiredMsg{token: token}
+			})
+		}
 		return a, nil
 
 	case ranMsg:
 		a.busy = false
+		wasApply := a.pendingApply
+		a.pendingApply = false
 		if msg.err != nil {
+			if wasApply {
+				// The batch was atomic: nft rejected it, so nothing changed and
+				// there is nothing to keep or roll back.
+				a.setStatusf(ui.StatusError,
+					"the staged batch was rejected and nothing changed: %s",
+					firstLine(msg.err.Error()))
+				return a, a.load()
+			}
 			a.setStatus(ui.StatusError, msg.err.Error())
 			return a, a.load()
+		}
+		if wasApply {
+			return a, a.armKeep()
 		}
 		summary := strings.TrimSpace(msg.output)
 		if summary == "" {
@@ -203,6 +255,17 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
 		a.loading = true
 		return a, a.load()
+
+	case keepExpiredMsg:
+		return a, a.keepExpired(msg.token)
+
+	case applyReadyMsg:
+		if msg.err != nil {
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, nil
+		}
+		a.openApplyConfirm(msg.change)
+		return a, nil
 
 	case tea.KeyMsg:
 		return a.handleKey(msg)
@@ -260,6 +323,8 @@ func (a *app) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	change, ok := a.confirm.Payload.(firewall.Change)
 	a.confirm = ui.Confirm{}
 	if !confirmed || !ok {
+		// A cancelled apply must not leave the next run looking like the batch.
+		a.pendingApply = false
 		a.setStatus(ui.StatusInfo, "cancelled")
 		return a, nil
 	}
@@ -358,6 +423,13 @@ func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.startExtra(choice)
 	case pickerExtraStep:
 		return a, a.answerExtra(choice)
+	case pickerStagingAction:
+		a.mode = modeTable
+		return a, a.stagingAction(choice)
+	case pickerStagingDrop:
+		a.mode = modeTable
+		a.dropStaged(choice)
+		return a, nil
 	default:
 		a.mode = modeTable
 		return a, nil
@@ -413,7 +485,7 @@ func (a *app) submitForm() tea.Cmd {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	a.openConfirm(change.Description, "The firewall will be changed as follows.", change)
+	a.stageOrConfirm(change.Description, "The firewall will be changed as follows.", change)
 	return nil
 }
 
@@ -427,6 +499,11 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "j", "down":
 		a.moveCursor(1)
 	case "k", "up":
+		// k keeps an applied batch when one is waiting; otherwise it is the
+		// vi-style move up.
+		if msg.String() == "k" && a.awaitingKeep {
+			return a, a.keepStaged()
+		}
 		a.moveCursor(-1)
 	case "g", "home":
 		a.cursor, a.offset = 0, 0
@@ -445,8 +522,11 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.loading = true
 		return a, a.load()
 	case "a":
-		a.form = newRuleForm(a.caps, a.model.Services)
-		a.mode = modeForm
+		return a, a.startAdd()
+	case "s":
+		a.toggleStaging()
+	case "S":
+		return a, a.openStagingMenu()
 	case "d":
 		return a, a.confirmDelete()
 	case "e":
@@ -469,6 +549,22 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// startAdd begins adding an entry to the view on screen. A rule view opens the
+// add-rule form; the NAT and alias views hold no plain rules, so a there opens
+// the actions menu those views add through — the masquerade and port-forward
+// actions for NAT, the create-alias action for the aliases — instead of a
+// refusal that only tells the user to press x.
+func (a *app) startAdd() tea.Cmd {
+	switch a.currentView() {
+	case firewall.ViewNAT, firewall.ViewAliases:
+		return a.openExtrasMenu()
+	default:
+		a.form = newRuleForm(a.caps, a.model.Services)
+		a.mode = modeForm
+		return nil
+	}
+}
+
 // buildAndConfirm runs a command builder and opens the confirm dialog, or
 // reports the builder's error in the status line.
 func (a *app) buildAndConfirm(title string,
@@ -478,7 +574,7 @@ func (a *app) buildAndConfirm(title string,
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	a.openConfirm(title, change.Description+".", change)
+	a.stageOrConfirm(title, change.Description+".", change)
 	return nil
 }
 
@@ -512,7 +608,7 @@ func (a *app) confirmDelete() tea.Cmd {
 		return nil
 	}
 	change.Destructive = true
-	a.openConfirm(change.Description, "Rule: "+describeRule(rule), change)
+	a.stageOrConfirm(change.Description, "Rule: "+describeRule(rule), change)
 	return nil
 }
 
@@ -695,7 +791,7 @@ func (a *app) confirmExtra() tea.Cmd {
 	if extra.Warning != "" {
 		body += "\n" + extra.Warning
 	}
-	a.openConfirm(extra.Label, body, change)
+	a.stageOrConfirm(extra.Label, body, change)
 	return nil
 }
 

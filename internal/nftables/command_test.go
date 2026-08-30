@@ -88,9 +88,51 @@ func TestBuildAddRule(t *testing.T) {
 		{
 			name: "a protocol with no port",
 			spec: firewall.RuleSpec{
-				Action: firewall.ActionAllow, Proto: "icmp",
+				Action: firewall.ActionAllow, Proto: "esp",
 			},
-			want: "nft add rule inet tui input meta l4proto icmp counter accept",
+			want: "nft add rule inet tui input meta l4proto esp counter accept",
+		},
+		{
+			name: "icmp becomes an ip protocol match",
+			spec: firewall.RuleSpec{
+				Action: firewall.ActionAllow, Proto: "icmp", ICMPType: "echo-request",
+			},
+			want: "nft add rule inet tui input ip protocol icmp " +
+				"icmp type echo-request counter accept",
+		},
+		{
+			name: "icmpv6 becomes an ip6 nexthdr match",
+			spec: firewall.RuleSpec{
+				Action: firewall.ActionAllow, Proto: "icmpv6",
+			},
+			want: "nft add rule inet tui input ip6 nexthdr ipv6-icmp counter accept",
+		},
+		{
+			name: "an interface match leads the rule",
+			spec: firewall.RuleSpec{
+				Action: firewall.ActionAllow, InIface: "lan0", Proto: "tcp",
+				Ports: "22",
+			},
+			want: `nft add rule inet tui input iifname "lan0" ` +
+				"tcp dport 22 counter accept",
+		},
+		{
+			name: "a stateful ct state match",
+			spec: firewall.RuleSpec{
+				Action:   firewall.ActionAllow,
+				CTStates: []string{"established", "related"},
+			},
+			want: "nft add rule inet tui input ct state established,related " +
+				"counter accept",
+		},
+		{
+			name: "an alias family read off the set type",
+			spec: firewall.RuleSpec{
+				Action: firewall.ActionAllow, Service: "@lan_hosts",
+				Proto: "tcp", Ports: "22",
+			},
+			want: "nft add rule inet tui input ip saddr @lan_hosts " +
+				"tcp dport 22 counter accept",
 		},
 		{
 			name: "logging is a statement, before the counter",
@@ -151,8 +193,8 @@ func TestBuildAddRuleRefusals(t *testing.T) {
 			firewall.RuleSpec{Action: firewall.ActionAllow, Service: "@nope",
 				Ports: "22", Proto: "tcp"},
 			"no alias"},
-		{"an alias with no family to pin it to",
-			firewall.RuleSpec{Action: firewall.ActionAllow, Service: "@lan_hosts",
+		{"an alias whose type names no family to pin it to",
+			firewall.RuleSpec{Action: firewall.ActionAllow, Service: "@admin_ports",
 				Ports: "22", Proto: "tcp"},
 			"family field"},
 		{"a comment with a newline in it",
@@ -451,7 +493,7 @@ func TestBuildNATCommands(t *testing.T) {
 	post := routerChain(t, ruleset, "postrouting")
 	pre := routerChain(t, ruleset, "prerouting")
 
-	change, err := ruleset.BuildMasquerade(post, "wan0")
+	change, err := ruleset.BuildMasquerade(post, "wan0", "")
 	if err != nil {
 		t.Fatalf("BuildMasquerade: %v", err)
 	}
@@ -493,10 +535,10 @@ func TestBuildNATRefusals(t *testing.T) {
 		want  string
 	}{
 		{"masquerade in a filter chain", func() (firewall.Change, error) {
-			return ruleset.BuildMasquerade(filter, "wan0")
+			return ruleset.BuildMasquerade(filter, "wan0", "")
 		}, "only happens in a nat chain"},
 		{"masquerade in the wrong hook", func() (firewall.Change, error) {
-			return ruleset.BuildMasquerade(pre, "wan0")
+			return ruleset.BuildMasquerade(pre, "wan0", "")
 		}, "hooked at postrouting"},
 		{"a port forward in the wrong hook", func() (firewall.Change, error) {
 			return ruleset.BuildPortForward(post, "wan0", "tcp", "80", "10.0.0.1", "80")

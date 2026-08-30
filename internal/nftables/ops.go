@@ -1,6 +1,7 @@
 package nftables
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,8 @@ const (
 	ExtraRemoveElement      = "remove-element"
 	ExtraMasquerade         = "add-masquerade"
 	ExtraPortForward        = "add-port-forward"
+	ExtraDeleteChain        = "delete-chain"
+	ExtraDeleteTable        = "delete-table"
 )
 
 // Writable reports whether this backend would accept a rule in the group, and
@@ -146,15 +149,22 @@ func (r Ruleset) Extras() []firewall.Extra {
 	if chain, ok := r.ownChain("postrouting"); ok && chain.Type == "nat" {
 		extras = append(extras, firewall.Extra{
 			ID:    ExtraMasquerade,
-			Label: "Masquerade everything leaving an interface",
-			Steps: []firewall.ExtraStep{{
-				Prompt:      "Outgoing interface",
-				Placeholder: "wan0, eth0, ppp0",
-			}},
+			Label: "Masquerade an interface (optionally one source network)",
+			Steps: []firewall.ExtraStep{
+				{
+					Prompt:      "Outgoing interface",
+					Placeholder: "wan0, eth0, ppp0",
+				},
+				{
+					Prompt:      "Source network (optional)",
+					Placeholder: "empty for all, or 10.0.0.0/24",
+				},
+			},
 			Danger: true,
 			Warning: "Every packet routed out of that interface leaves with " +
 				"the router's own address, and the hosts behind it stop " +
-				"being reachable from outside except through a port forward.",
+				"being reachable from outside except through a port forward. " +
+				"A source network scopes it to one subnet.",
 		})
 	}
 	if chain, ok := r.ownChain("prerouting"); ok && chain.Type == "nat" {
@@ -174,7 +184,57 @@ func (r Ruleset) Extras() []firewall.Extra {
 				"forward chain still has to allow the traffic as well.",
 		})
 	}
+	extras = append(extras, r.structureExtras()...)
 	return extras
+}
+
+// structureExtras are the actions that remove the structure this tool created:
+// a chain of its own table, and the table itself. They act only on OwnTable —
+// the guard in the builders refuses anything else — and they are the reason a
+// router set up by mistake can be taken apart from the same menu that built it.
+func (r Ruleset) structureExtras() []firewall.Extra {
+	table, ok := r.Table(OwnTable)
+	if !ok {
+		return nil
+	}
+	var extras []firewall.Extra
+	if names := chainNames(table); len(names) > 0 {
+		extras = append(extras, firewall.Extra{
+			ID:    ExtraDeleteChain,
+			Label: "Delete a chain of " + OwnTable.String(),
+			Steps: []firewall.ExtraStep{
+				{Prompt: "Chain to delete", Options: names},
+				{
+					Prompt:  "Delete its rules too, if it has any",
+					Options: []string{"no", "yes"},
+					Current: "no",
+				},
+			},
+			Danger: true,
+			Warning: "A base chain that is deleted stops filtering its hook " +
+				"entirely: with the input chain gone, its policy goes with it.",
+		})
+	}
+	extras = append(extras, firewall.Extra{
+		ID:     ExtraDeleteTable,
+		Label:  "Delete the whole " + OwnTable.String() + " table",
+		Danger: true,
+		Warning: "Every chain, alias, rule and port forward this tool ever " +
+			"created is in that table, and all of it goes at once. Nothing " +
+			"outside " + OwnTable.String() + " is touched.",
+	})
+	return extras
+}
+
+// chainNames lists the chains of a table in a stable order, for the picker
+// that offers one to delete.
+func chainNames(table Table) []string {
+	names := make([]string, 0, len(table.Chains))
+	for _, chain := range table.Chains {
+		names = append(names, chain.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // aliasExtras are the alias actions, offered against the table this tool
@@ -254,7 +314,24 @@ func (r Ruleset) BuildExtra(id string, args []string) (firewall.Change, error) {
 			return firewall.Change{}, errorf(
 				"table %s has no postrouting chain to masquerade in", OwnTable)
 		}
-		return r.BuildMasquerade(chain, args[0])
+		source := ""
+		if len(args) > 1 {
+			source = args[1]
+		}
+		return r.BuildMasquerade(chain, args[0], source)
+	case ExtraDeleteChain:
+		if len(args) < 1 {
+			return firewall.Change{}, tooFewAnswers(args, 1)
+		}
+		chain, ok := r.ownChain(args[0])
+		if !ok {
+			return firewall.Change{}, errorf("table %s has no chain %s",
+				OwnTable, args[0])
+		}
+		force := len(args) > 1 && args[1] == "yes"
+		return r.BuildDeleteChain(chain, force)
+	case ExtraDeleteTable:
+		return r.BuildDeleteTable(OwnTable)
 	case ExtraPortForward:
 		if len(args) < 5 {
 			return firewall.Change{}, tooFewAnswers(args, 5)
