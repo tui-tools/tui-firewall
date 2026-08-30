@@ -129,11 +129,40 @@ is what executes.
 ```sh
 tui-firewall                      # drive the real firewall
 tui-firewall --demo               # sample data, no privileges needed
+tui-firewall --check              # read the firewall, print JSON, exit
 tui-firewall --backend ufw        # skip autodetection
 tui-firewall --theme ~/mytheme/colors.toml
 tui-firewall --sudo ""            # run the firewall command directly (as root)
 tui-firewall --version
 ```
+
+### `--check`, for scripts and tests
+
+`--check` is the non-interactive read path: it loads the firewall through the
+same backend the UI would use, prints the parsed model as JSON and exits 0, or
+exits 1 with the reason if the backend cannot be read. No UI, and it never
+builds or runs a mutation, so it is safe to run anywhere.
+
+```console
+$ sudo -n tui-firewall --check | head -8
+{
+  "tool": "tui-firewall",
+  "version": "0.1.0",
+  "backend": "ufw",
+  "describe": "ufw via /usr/bin/sudo -n",
+  "enabled": true,
+  "logging": "low",
+  "groups": 1,
+```
+
+It exists so a test can assert on what the tool *parsed* rather than on what it
+painted — for instance that the rule count matches `ufw status numbered`, which
+is what catches a parser regression. On a machine running firewalld it exits
+non-zero with "not implemented yet", because that backend is still a stub.
+
+[tui-lab](https://github.com/tui-tools/tui-lab) uses it to test this tool
+against real firewalls on Ubuntu, Fedora and Omarchy Server; the assertions live
+in [`test/smoke.sh`](test/smoke.sh).
 
 `tui-firewall` needs root to change anything. When it is not running as root it
 uses `sudo -n`, which never prompts: run `sudo -v` in another terminal first, or
