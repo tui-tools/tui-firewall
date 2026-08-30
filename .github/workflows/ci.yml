@@ -230,7 +230,8 @@ jobs:
       # Both are called by GoReleaser itself: syft for the `sboms` section,
       # cosign for the `signs` one. They have to be on PATH before it runs.
       - uses: anchore/sbom-action/download-syft@v0
-      - uses: sigstore/cosign-installer@v4
+      # Pinned to an exact version: this action publishes no moving major tag.
+      - uses: sigstore/cosign-installer@v4.1.2
 
       - uses: goreleaser/goreleaser-action@v7
         with:
