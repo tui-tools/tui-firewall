@@ -469,6 +469,20 @@ hidden; one below the minimum is marked as such and the tool still runs.
 | `==2.0.0` | `--permanent --list-all-zones` prints the same settings for every zone on this release (firewalld#1152), so the permanent half of the runtime/permanent comparison is not trustworthy; 2.0.1 fixed it |
 | `>=2.2` | firewalld removed the lockdown feature, so no lockdown state is shown |
 
+### nftables
+
+| | |
+| --- | --- |
+| Binary | `nft` |
+| Version read with | `nft --version` |
+| Minimum | 0.9 |
+| Tested | none yet |
+
+| Versions | What changes |
+| --- | --- |
+| `<0.9` | `nft -j` does not exist yet, so there is no ruleset to read in any form this tool will parse. 0.9.0 is where nft grew JSON output and stamped it json_schema_version 1, the schema this backend reads, and that is the whole reason the minimum is 0.9 |
+| `>=0.9` | `nft -j list ruleset` carries rule handles whether or not `-a` is given, unlike the human output. A handle is how a rule is deleted, because positions shift the moment anything is inserted above them |
+
 The tested versions are generated from `compat/results.jsonl`, which the tool's
 own smoke test appends to when it runs against a real machine in
 [tui-lab](https://github.com/tui-tools/tui-lab).

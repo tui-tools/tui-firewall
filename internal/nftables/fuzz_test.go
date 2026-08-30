@@ -2,8 +2,6 @@ package nftables
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -32,7 +30,7 @@ import (
 func seedFixtures(f *testing.F) {
 	f.Helper()
 	for _, name := range fixtures {
-		data, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+		data, err := readTestdata(name)
 		if err != nil {
 			f.Fatalf("reading seed %s: %v", name, err)
 		}
@@ -480,7 +478,7 @@ func containsWord(argv []string, word string) bool {
 // than failing: a missing seed is a weaker corpus, not a broken target.
 func readSeed(f *testing.F, name string) []byte {
 	f.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+	data, err := readTestdata(name)
 	if err != nil {
 		return nil
 	}
@@ -490,7 +488,7 @@ func readSeed(f *testing.F, name string) []byte {
 // mustReadSeedBytes reads a fixture a target cannot run without.
 func mustReadSeedBytes(f *testing.F, name string) []byte {
 	f.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+	data, err := readTestdata(name)
 	if err != nil {
 		f.Fatalf("reading %s: %v", name, err)
 	}

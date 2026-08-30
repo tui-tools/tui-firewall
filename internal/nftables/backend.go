@@ -71,6 +71,11 @@ func (r *Real) Preview(change firewall.Change) string {
 // Load reads the whole ruleset in one command. Listing the ruleset needs
 // root, like every other nft read, so it goes through the runner's privileged
 // read path.
+//
+// There is no `-a` on the command line and there does not need to be: nft's
+// `-a` adds handles to its *human* output, and the JSON form carries them
+// unconditionally. Which matters, because a handle is the only identifier a
+// delete can safely name.
 func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 	out, err := r.run.Read(ctx, "nft", "-j", "list", "ruleset")
 	if err != nil {

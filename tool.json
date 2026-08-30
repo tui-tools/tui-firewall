@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "name": "tui-firewall",
   "binary": "tui-firewall",
-  "tagline": "ufw and firewalld, with every change previewed before it runs",
-  "description": "A terminal UI for the Linux firewall, driving **ufw** and **firewalld**. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or zone targets and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes. On firewalld that means both lines: the change to the running firewall and the same change made permanent, with no reload and no dropped connections.\n\nRun `tui-firewall --demo` for an in-memory ufw, or `tui-firewall --demo=firewalld` for an in-memory firewalld: every key works, every command is built and previewed for real, and nothing touches your system.",
+  "tagline": "ufw, firewalld and nftables, with every change previewed before it runs",
+  "description": "A terminal UI for the Linux firewall, driving **ufw**, **firewalld** and **nftables** directly. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or chain policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes.\n\nOn a machine neither ufw nor firewalld manages it reads `nft -j list ruleset` and drives nft itself: filter chains by hook, a NAT view for masquerading and port forwards, and named sets as aliases with the number of rules using each. It writes only to a base chain whose policy nft reported, or to its own table, and says why when it will not.\n\nRun `tui-firewall --demo` for an in-memory ufw, `--demo=firewalld` for firewalld, or `--demo=nftables` for a sample router ruleset: every key works, every command is built and previewed for real, and nothing touches your system.",
   "category": "firewall",
   "homepage": "https://github.com/tui-tools/tui-firewall",
   "repo": "https://github.com/tui-tools/tui-firewall",
@@ -78,8 +78,12 @@
       "action": "Filter rules across every column"
     },
     {
+      "key": "v",
+      "action": "Pick a group: a firewalld zone, an nftables chain, NAT, aliases"
+    },
+    {
       "key": "[ / ]",
-      "action": "Previous / next group: the firewalld zones and policies"
+      "action": "Previous / next group: firewalld zones, nftables chains"
     },
     {
       "key": "R",
@@ -153,6 +157,31 @@
       "tested": [
         "2.4.4"
       ]
+    },
+    {
+      "name": "nftables",
+      "binary": "nft",
+      "versionCommand": [
+        "nft",
+        "--version"
+      ],
+      "versionRegex": "nftables v([0-9][0-9.]*)",
+      "minimum": "0.9",
+      "searchPaths": [
+        "/usr/sbin/nft",
+        "/sbin/nft"
+      ],
+      "notes": [
+        {
+          "range": "<0.9",
+          "impact": "`nft -j` does not exist yet, so there is no ruleset to read in any form this tool will parse. 0.9.0 is where nft grew JSON output and stamped it json_schema_version 1, the schema this backend reads, and that is the whole reason the minimum is 0.9"
+        },
+        {
+          "range": ">=0.9",
+          "impact": "`nft -j list ruleset` carries rule handles whether or not `-a` is given, unlike the human output. A handle is how a rule is deleted, because positions shift the moment anything is inserted above them"
+        }
+      ],
+      "tested": []
     }
   ],
   "install": {
@@ -243,6 +272,11 @@
     "nftables",
     "firewall",
     "tui",
-    "bubbletea"
+    "bubbletea",
+    "nft",
+    "nat",
+    "port-forward",
+    "aliases",
+    "router"
   ]
 }

@@ -107,11 +107,16 @@ func (a *app) headerView() string {
 	if group, ok := a.model.Group(a.group); ok {
 		facts = append(facts, policyFacts(group)...)
 	}
-	logging := a.model.Logging
-	if logging == "" {
-		logging = "unknown"
+	// A backend with no logging concept gets no logging fact: "logging:
+	// unknown" reads as a machine whose state could not be read, and on
+	// nftables it only means the question does not apply.
+	if a.caps.SupportsLogging {
+		logging := a.model.Logging
+		if logging == "" {
+			logging = "unknown"
+		}
+		facts = append(facts, ui.Fact{Label: a.loggingFactLabel(), Value: logging})
 	}
-	facts = append(facts, ui.Fact{Label: a.loggingFactLabel(), Value: logging})
 	// The backend version, when it was probed: quiet on a tested version,
 	// coloured on one nobody has run against.
 	if a.backendCompat.Backend != "" {

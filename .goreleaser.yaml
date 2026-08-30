@@ -70,7 +70,7 @@ nfpms:
     vendor: tui-tools
     homepage: https://tui.tools/tools/tui-firewall/
     maintainer: tui-tools <maintainers@tui.tools>
-    description: "ufw and firewalld, with every change previewed before it runs"
+    description: "ufw, firewalld and nftables, with every change previewed before it runs"
     license: MIT
     # The binary belongs in the distribution's own path, not /usr/local: it
     # arrives through the package manager, so the package manager owns it.

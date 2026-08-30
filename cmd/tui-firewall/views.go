@@ -70,8 +70,11 @@ func (a *app) natTable() string {
 func (a *app) aliasTable() string {
 	columns := []ui.Column{
 		{Title: "#", Width: 3},
-		{Title: "NAME", Width: 18, Flex: true},
-		{Title: "HOLDS", Width: 12},
+		{Title: "NAME", Width: 16, Flex: true},
+		// Wide enough for the longest type with its flags spelled out:
+		// "ipv4_addr (interval,timeout)" is what firewalld's own sets look
+		// like, and an alias whose type is truncated says very little.
+		{Title: "HOLDS", Width: 20, Flex: true},
 	}
 	showTable := a.width >= 80
 	showComment := a.width >= 100
@@ -181,10 +184,15 @@ func (a *app) flowRuleTable() string {
 		{Title: "OUT", Width: 6},
 	}
 	showProto := a.width >= 70
+	showFamily := a.width >= 78 &&
+		anyRule(a.visible, func(r firewall.Rule) bool { return r.Family != "" })
 	showCounter := a.width >= 96
 	showComment := a.width >= 110
 	if showProto {
 		columns = append(columns, ui.Column{Title: "PROTO", Width: 5})
+	}
+	if showFamily {
+		columns = append(columns, ui.Column{Title: "IP", Width: 2})
 	}
 	columns = append(columns,
 		ui.Column{Title: "SOURCE", Width: 16, Flex: true},
@@ -208,6 +216,9 @@ func (a *app) flowRuleTable() string {
 		}
 		if showProto {
 			row = append(row, orDash(rule.Proto))
+		}
+		if showFamily {
+			row = append(row, familyLabel(rule.Family))
 		}
 		row = append(row, rule.From, rule.To, orDash(rule.Ports))
 		if showCounter {

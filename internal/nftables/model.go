@@ -311,7 +311,7 @@ func (r *Ruleset) countReferences() {
 		for _, c := range t.Chains {
 			for _, rule := range c.Rules {
 				for _, name := range unique(rule.Match.Sets) {
-					counts[t.TableID.String()+"/"+name]++
+					counts[t.String()+"/"+name]++
 				}
 			}
 		}

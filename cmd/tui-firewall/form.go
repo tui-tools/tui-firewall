@@ -83,8 +83,16 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 
 	fields := []formField{
 		{key: "action", label: "Action", kind: fieldChoice, options: actions},
-		{key: "direction", label: "Direction", kind: fieldChoice, options: directions,
-			help: "Leave empty to let the backend decide."},
+	}
+	// A backend that qualifies a rule by direction gets the field; one whose
+	// rules take their direction from where they live — an nftables chain is
+	// hooked at exactly one point — would only be offering "(none)".
+	if len(caps.Directions) > 0 {
+		fields = append(fields, formField{key: "direction", label: "Direction",
+			kind: fieldChoice, options: directions,
+			help: "Leave empty to let the backend decide."})
+	}
+	fields = append(fields, []formField{
 		{key: "service", label: caps.ServiceLabel, kind: fieldChoice,
 			options: serviceOptions, help: "Replaces port and protocol."},
 		{key: "ports", label: "Port(s)", kind: fieldText,
@@ -93,7 +101,7 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 		{key: "from", label: "From", kind: fieldText,
 			input: text("any, 10.0.0.0/8, fd00::/8")},
 		{key: "to", label: "To", kind: fieldText, input: text("any, 192.168.1.10")},
-	}
+	}...)
 	if caps.SupportsFamily {
 		fields = append(fields, formField{key: "family", label: "Family",
 			kind: fieldChoice, options: []string{noneOption, "v4", "v6"},

@@ -229,18 +229,18 @@ func (r Ruleset) BuildExtra(id string, args []string) (firewall.Change, error) {
 	case ExtraCreateAlias:
 		return r.buildCreateAlias(args)
 	case ExtraAddElement:
-		if err := needArgs(args, 2); err != nil {
-			return firewall.Change{}, err
+		if len(args) < 2 {
+			return firewall.Change{}, tooFewAnswers(args, 2)
 		}
 		return r.BuildAddElement(OwnTable, args[0], args[1])
 	case ExtraRemoveElement:
-		if err := needArgs(args, 2); err != nil {
-			return firewall.Change{}, err
+		if len(args) < 2 {
+			return firewall.Change{}, tooFewAnswers(args, 2)
 		}
 		return r.BuildRemoveElement(OwnTable, args[0], args[1])
 	case ExtraMasquerade:
-		if err := needArgs(args, 1); err != nil {
-			return firewall.Change{}, err
+		if len(args) < 1 {
+			return firewall.Change{}, tooFewAnswers(args, 1)
 		}
 		chain, ok := r.ownChain("postrouting")
 		if !ok {
@@ -249,8 +249,8 @@ func (r Ruleset) BuildExtra(id string, args []string) (firewall.Change, error) {
 		}
 		return r.BuildMasquerade(chain, args[0])
 	case ExtraPortForward:
-		if err := needArgs(args, 5); err != nil {
-			return firewall.Change{}, err
+		if len(args) < 5 {
+			return firewall.Change{}, tooFewAnswers(args, 5)
 		}
 		chain, ok := r.ownChain("prerouting")
 		if !ok {
@@ -263,18 +263,18 @@ func (r Ruleset) BuildExtra(id string, args []string) (firewall.Change, error) {
 	}
 }
 
-// needArgs checks that an action collected every answer it asked for.
-func needArgs(args []string, want int) error {
-	if len(args) < want {
-		return errorf("this action needs %d answers and got %d", want, len(args))
-	}
-	return nil
+// tooFewAnswers is the refusal for an action whose steps did not all come
+// back. Each caller checks the length at the point it indexes, rather than
+// through a helper: the check and the indexing belong in one place, and a
+// guard a static analyser cannot follow is a guard a reader has to trust.
+func tooFewAnswers(args []string, want int) error {
+	return errorf("this action needs %d answers and got %d", want, len(args))
 }
 
 // buildCreateAlias reads the four answers the alias form collects.
 func (r Ruleset) buildCreateAlias(args []string) (firewall.Change, error) {
-	if err := needArgs(args, 3); err != nil {
-		return firewall.Change{}, err
+	if len(args) < 3 {
+		return firewall.Change{}, tooFewAnswers(args, 3)
 	}
 	comment := ""
 	if len(args) > 3 {

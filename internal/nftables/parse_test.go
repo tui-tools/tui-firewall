@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Where the fixtures come from.
+// The fixtures, and where they come from.
 //
 // `nft -j list ruleset` needs root, and this repository's tests do not have
 // it. What they do have is nft itself: a user namespace with a network
@@ -36,15 +36,20 @@ import (
 // The two manager fixtures are hand-built rather than taken off a running
 // machine on purpose: a capture from this host would carry its interfaces and
 // addresses, and a fixture is not the place for either.
-const fixtureProvenance = "see the comment above"
-
 // fixtures are the four rulesets every table test runs over.
 var fixtures = []string{"empty", "router", "firewalld", "ufw"}
 
-// readFixture loads one fixture by name.
+// readTestdata reads one fixture. It is the only place in these tests that
+// opens a file, so the one path they build is built once.
+func readTestdata(name string) ([]byte, error) {
+	//nolint:gosec // the name comes from the fixture list in this file
+	return os.ReadFile(filepath.Join("testdata", name+".json"))
+}
+
+// readFixture loads one fixture by name, failing the test when it cannot.
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+	data, err := readTestdata(name)
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
 	}

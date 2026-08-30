@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tuifirewall "github.com/tui-tools/tui-firewall"
+	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
 	"github.com/tui-tools/tui-kit/compat"
 	"github.com/tui-tools/tui-kit/manifest"
@@ -40,12 +41,34 @@ func TestProbeCompatSkipsDemo(t *testing.T) {
 	}
 }
 
-// A backend the manifest does not describe (firewalld today) is not an error,
-// it is simply nothing to show.
+// A backend the manifest does not describe is not an error, it is simply
+// nothing to show.
 func TestProbeCompatUnknownBackend(t *testing.T) {
-	got := probeCompat(context.Background(), "nftables", false)
+	got := probeCompat(context.Background(), "iptables", false)
 	if got.Backend != "" {
 		t.Errorf("unknown backend = %+v, want the zero result", got)
+	}
+}
+
+// Every backend the tool can select has a block in the manifest, or the
+// header would quietly stop saying which version it is driving.
+func TestEveryBackendIsDescribedByTheManifest(t *testing.T) {
+	m, err := manifest.Load(tuifirewall.ManifestJSON)
+	if err != nil {
+		t.Fatalf("loading the manifest: %v", err)
+	}
+	for _, name := range backends.Names() {
+		if name == backends.BackendAuto {
+			continue
+		}
+		backend, ok := m.Backend(name)
+		if !ok {
+			t.Errorf("the manifest describes no backend %q", name)
+			continue
+		}
+		if backend.Minimum == "" {
+			t.Errorf("backend %q declares no minimum version", name)
+		}
 	}
 }
 
