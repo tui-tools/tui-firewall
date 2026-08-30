@@ -1,15 +1,36 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	tuifirewall "github.com/tui-tools/tui-firewall"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
+	"github.com/tui-tools/tui-kit/compat"
+	"github.com/tui-tools/tui-kit/manifest"
 	"github.com/tui-tools/tui-kit/theme"
 )
+
+// testCompat probes the manifest's real ufw backend against a canned
+// `ufw --version` output, so the header is exercised with the same block the
+// binary ships rather than with a hand-written fixture.
+func testCompat(t *testing.T, versionOutput string) compat.Result {
+	t.Helper()
+	m, err := manifest.Load(tuifirewall.ManifestJSON)
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	backend, ok := m.Backend("ufw")
+	if !ok {
+		t.Fatal("the manifest declares no ufw backend")
+	}
+	return compat.ProbeWith(context.Background(), backend,
+		func(context.Context, []string) (string, error) { return versionOutput, nil })
+}
 
 // newTestApp builds the demo app at a fixed size, with colors disabled so
 // assertions can look for plain text.
@@ -17,7 +38,7 @@ func newTestApp(t *testing.T, width, height int) (*app, *ufw.Fake) {
 	t.Helper()
 	t.Setenv("NO_COLOR", "1")
 	fake := ufw.NewFake()
-	a := newApp(fake, theme.FromPalette(theme.TokyoNight()))
+	a := newApp(fake, theme.FromPalette(theme.TokyoNight()), testCompat(t, "ufw 0.36.2"))
 	a.width, a.height = width, height
 	// Drain Init's load command synchronously: the fake never blocks.
 	msg := a.Init()()

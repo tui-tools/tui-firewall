@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/compat"
 	"github.com/tui-tools/tui-kit/theme"
 	"github.com/tui-tools/tui-kit/ui"
 )
@@ -42,6 +43,8 @@ type app struct {
 	backend firewall.Backend
 	theme   theme.Theme
 	caps    firewall.Capabilities
+	// backendCompat is what the version probe found, rendered in the header.
+	backendCompat compat.Result
 
 	model firewall.Model
 	// group is the name of the group currently shown.
@@ -89,14 +92,23 @@ type ranMsg struct {
 }
 
 // newApp builds the model around a backend.
-func newApp(backend firewall.Backend, th theme.Theme) *app {
+func newApp(backend firewall.Backend, th theme.Theme,
+	backendCompat compat.Result) *app {
 	a := &app{
-		backend: backend,
-		theme:   th,
-		caps:    backend.Capabilities(),
-		width:   80,
-		height:  24,
-		loading: true,
+		backend:       backend,
+		theme:         th,
+		caps:          backend.Capabilities(),
+		backendCompat: backendCompat,
+		width:         80,
+		height:        24,
+		loading:       true,
+	}
+	// ufw grew rule comments in 0.35. On an older one the backend would build
+	// a command the firewall refuses, so the field is dropped from the add
+	// form instead — and which version that is stays in the manifest, not in
+	// a comparison written here.
+	if !backendCompat.Caps().Has("rule-comments") {
+		a.caps.SupportsComments = false
 	}
 	if th.Warning != "" {
 		a.setStatus(ui.StatusWarn, th.Warning)

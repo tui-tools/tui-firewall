@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -123,8 +124,12 @@ func run(args []string) error {
 	// and never starts a terminal program. It is checked after the backend is
 	// built so that a machine with no usable firewall fails here with the same
 	// message the UI would have shown.
+	// The backend version is probed once, here, and used by both paths: the
+	// header shows it, --check reports it, and the smoke test records it.
+	backendCompat := probeCompat(context.Background(), backend.Name(), opts.demo)
+
 	if opts.check {
-		return runCheck(backend, os.Stdout)
+		return runCheck(backend, backendCompat, os.Stdout)
 	}
 
 	// The configured theme is handed to the kit through the same variable the
@@ -135,7 +140,8 @@ func run(args []string) error {
 		}
 	}
 
-	program := tea.NewProgram(newApp(backend, theme.New()), tea.WithAltScreen())
+	program := tea.NewProgram(newApp(backend, theme.New(), backendCompat),
+		tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }

@@ -8,7 +8,10 @@
   "homepage": "https://github.com/tui-tools/tui-firewall",
   "repo": "https://github.com/tui-tools/tui-firewall",
   "license": "MIT",
-  "platforms": ["linux/amd64", "linux/arm64"],
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
   "icon": "assets/icon.svg",
   "logo": "assets/logo.png",
   "screenshots": [
@@ -34,17 +37,85 @@
     }
   ],
   "keys": [
-    { "key": "a", "action": "Add a rule" },
-    { "key": "d", "action": "Delete the selected rule" },
-    { "key": "e", "action": "Enable or disable the firewall" },
-    { "key": "p", "action": "Change a default policy" },
-    { "key": "L", "action": "Change the logging level" },
-    { "key": "r", "action": "Reload the firewall" },
-    { "key": "/", "action": "Filter rules across every column" },
-    { "key": "[ / ]", "action": "Previous / next group, on multi-group backends" },
-    { "key": "R", "action": "Re-read the firewall" },
-    { "key": "?", "action": "Help" },
-    { "key": "q", "action": "Quit" }
+    {
+      "key": "a",
+      "action": "Add a rule"
+    },
+    {
+      "key": "d",
+      "action": "Delete the selected rule"
+    },
+    {
+      "key": "e",
+      "action": "Enable or disable the firewall"
+    },
+    {
+      "key": "p",
+      "action": "Change a default policy"
+    },
+    {
+      "key": "L",
+      "action": "Change the logging level"
+    },
+    {
+      "key": "r",
+      "action": "Reload the firewall"
+    },
+    {
+      "key": "/",
+      "action": "Filter rules across every column"
+    },
+    {
+      "key": "[ / ]",
+      "action": "Previous / next group, on multi-group backends"
+    },
+    {
+      "key": "R",
+      "action": "Re-read the firewall"
+    },
+    {
+      "key": "?",
+      "action": "Help"
+    },
+    {
+      "key": "q",
+      "action": "Quit"
+    }
+  ],
+  "backends": [
+    {
+      "name": "ufw",
+      "binary": "ufw",
+      "versionCommand": [
+        "ufw",
+        "--version"
+      ],
+      "versionRegex": "ufw ([0-9][0-9.]*)",
+      "minimum": "0.36",
+      "searchPaths": [
+        "/usr/sbin/ufw",
+        "/sbin/ufw"
+      ],
+      "features": [
+        {
+          "name": "rule-comments",
+          "since": "0.35"
+        }
+      ],
+      "notes": [
+        {
+          "range": "<0.36",
+          "impact": "`ufw status numbered` has no app profile column, so a rule added from a profile is shown by its ports and cannot be edited as a profile"
+        },
+        {
+          "range": "0.36.x",
+          "impact": "`status numbered` indexes IPv4 and IPv6 halves of one rule separately, so deleting by number renumbers the rest and the list is re-read after every delete"
+        }
+      ],
+      "tested": [
+        "0.36.2"
+      ]
+    }
   ],
   "install": {
     "pacman": {
@@ -118,8 +189,19 @@
     ]
   },
   "maintainers": [
-    { "name": "Edimar Cardoso", "github": "edimarlnx" }
+    {
+      "name": "Edimar Cardoso",
+      "github": "edimarlnx"
+    }
   ],
   "since": "2026-08-29",
-  "keywords": ["ufw", "firewalld", "iptables", "nftables", "firewall", "tui", "bubbletea"]
+  "keywords": [
+    "ufw",
+    "firewalld",
+    "iptables",
+    "nftables",
+    "firewall",
+    "tui",
+    "bubbletea"
+  ]
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/compat"
 )
 
 // checkTimeout bounds the read. Loading the rule set shells out to the
@@ -33,6 +34,10 @@ type checkReport struct {
 	// Groups and Rules are the totals across the model.
 	Groups int `json:"groups"`
 	Rules  int `json:"rules"`
+	// Compat is what the backend version probe found. It is reported rather
+	// than asserted: an untested version is a fact about the machine, not a
+	// failure of the read path.
+	Compat compat.Result `json:"compat"`
 	// Model is the parsed state in full.
 	Model firewall.Model `json:"model"`
 }
@@ -46,7 +51,8 @@ type checkReport struct {
 // the correct result: the tool cannot read that machine's firewall, and a
 // smoke test asserting "firewalld is still a stub" asserts exactly this
 // failure.
-func runCheck(backend firewall.Backend, out io.Writer) error {
+func runCheck(backend firewall.Backend, backendCompat compat.Result,
+	out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
 
@@ -63,6 +69,7 @@ func runCheck(backend firewall.Backend, out io.Writer) error {
 		Enabled:  model.Enabled,
 		Logging:  model.Logging,
 		Groups:   len(model.Groups),
+		Compat:   backendCompat,
 		Model:    model,
 	}
 	for _, group := range model.Groups {

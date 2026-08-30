@@ -1,0 +1,2 @@
+{"backend": "ufw", "date": "2026-08-30", "distro": "omarchy-server-4.0.1", "result": "pass", "suite": "smoke", "tool": "tui-firewall", "version": "0.36.2"}
+{"backend": "ufw", "date": "2026-08-30", "distro": "ubuntu-24.04", "result": "pass", "suite": "smoke", "tool": "tui-firewall", "version": "0.36.2"}

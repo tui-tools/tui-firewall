@@ -91,6 +91,11 @@ func (a *app) headerView() string {
 		logging = "unknown"
 	}
 	facts = append(facts, ui.Fact{Label: "logging", Value: logging})
+	// The backend version, when it was probed: quiet on a tested version,
+	// coloured on one nobody has run against.
+	if a.backendCompat.Backend != "" {
+		facts = append(facts, ui.CompatFact(t, a.backendCompat))
+	}
 
 	// The group selector only makes sense when the backend has more than one
 	// group; ufw always has exactly one.
