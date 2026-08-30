@@ -356,7 +356,7 @@ hidden; one below the minimum is marked as such and the tool still runs.
 | Binary | `firewall-cmd` |
 | Version read with | `firewall-cmd --version` |
 | Minimum | 0.9 |
-| Tested | none yet |
+| Tested | `2.4.4` |
 
 | Versions | What changes |
 | --- | --- |

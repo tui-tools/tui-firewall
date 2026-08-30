@@ -149,6 +149,9 @@
           "range": ">=2.2",
           "impact": "firewalld removed the lockdown feature, so no lockdown state is shown"
         }
+      ],
+      "tested": [
+        "2.4.4"
       ]
     }
   ],

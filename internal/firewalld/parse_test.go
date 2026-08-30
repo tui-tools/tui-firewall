@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
@@ -18,6 +19,11 @@ import (
 // list-all-rich.txt is the one hand-written fixture: it carries the entries
 // that host happened not to have (bound sources, forward ports, rich rules
 // with logging), written in the syntax firewalld's own documentation uses.
+//
+// The *-firewalld244.txt pair is the other end of the tested range, captured
+// verbatim from the lab's Fedora 44 guest running firewall-cmd 2.4.4. Holding
+// both ends is what turns "the format did not change between 2.3.2 and 2.4.4"
+// from an assumption into a test.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
@@ -67,6 +73,94 @@ func TestParseSectionsReadsEveryZone(t *testing.T) {
 	if block := sections[1]; block.First(KeyTarget) != "%%REJECT%%" {
 		t.Errorf("block target = %q", block.First(KeyTarget))
 	}
+}
+
+func TestParseSectionsReadsFirewalld244(t *testing.T) {
+	// Fedora 44 ships firewall-cmd 2.4.4, two minor versions past the machine
+	// the first fixtures came from. The zone listing is the tool's one
+	// unstructured read, so the question worth a test is whether that release
+	// prints a key the parser does not know, or drops one it relies on.
+	older := keysOf(ParseSections(fixture(t, "list-all-zones.txt")))
+	newer := keysOf(ParseSections(fixture(t, "list-all-zones-firewalld244.txt")))
+	if !reflect.DeepEqual(older, newer) {
+		t.Errorf("key set changed between 2.3.2 and 2.4.4:\n2.3.2: %q\n2.4.4: %q",
+			older, newer)
+	}
+
+	sections := ParseSections(fixture(t, "list-all-zones-firewalld244.txt"))
+	if len(sections) != 12 {
+		t.Fatalf("zones = %d, want the 12 Fedora 44 ships", len(sections))
+	}
+
+	// public is the default zone on a stock Fedora Cloud guest, and the one
+	// the lab's smoke test drives.
+	var public *Section
+	for i := range sections {
+		if sections[i].Name == "public" {
+			public = &sections[i]
+		}
+	}
+	if public == nil {
+		t.Fatal("no public zone")
+	}
+	if !public.Default || !public.Active {
+		t.Errorf("public flags: default=%v active=%v, want both true",
+			public.Default, public.Active)
+	}
+	if got := public.First(KeyTarget); got != "default" {
+		t.Errorf("target = %q", got)
+	}
+	if got := public.Field(KeyServices); !reflect.DeepEqual(got,
+		[]string{"dhcpv6-client", "mdns", "ssh"}) {
+		t.Errorf("services = %q", got)
+	}
+	if got := public.Field(KeyInterfaces); !reflect.DeepEqual(got,
+		[]string{"enp0s4"}) {
+		t.Errorf("interfaces = %q", got)
+	}
+
+	// nm-shared carries the tab-indented rich rule on this machine, so the
+	// continuation handling is exercised on 2.4.4 too and not only on 2.3.2.
+	for _, s := range sections {
+		if s.Name != "nm-shared" {
+			continue
+		}
+		want := []string{`rule priority="32767" reject`}
+		if !reflect.DeepEqual(s.RichRules, want) {
+			t.Errorf("nm-shared rich rules = %q, want %q", s.RichRules, want)
+		}
+	}
+}
+
+func TestParseActiveZonesOnFirewalld244(t *testing.T) {
+	zones := ParseActiveZones(fixture(t, "get-active-zones-firewalld244.txt"))
+	if len(zones) != 1 {
+		t.Fatalf("zones = %d, want 1", len(zones))
+	}
+	if zones[0].Name != "public" || !zones[0].Default {
+		t.Errorf("zone = %+v, want public marked default", zones[0])
+	}
+	if !reflect.DeepEqual(zones[0].Interfaces, []string{"enp0s4"}) {
+		t.Errorf("interfaces = %q", zones[0].Interfaces)
+	}
+}
+
+// keysOf collects every key the parser recognised across a listing, so two
+// releases can be compared on the shape of their output rather than on the
+// zones a particular machine happens to have configured.
+func keysOf(sections []Section) []string {
+	seen := map[string]bool{}
+	for _, s := range sections {
+		for _, key := range s.Order {
+			seen[key] = true
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestParseSectionsKeepsRichRulesWhole(t *testing.T) {
