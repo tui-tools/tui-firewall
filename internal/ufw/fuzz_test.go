@@ -58,13 +58,10 @@ func checkRule(t *testing.T, r firewall.Rule) {
 	default:
 		t.Fatalf("proto = %q, want tcp, udp or empty", r.Proto)
 	}
-	// A slice of pairs rather than a map literal: govulncheck's SSA builder
-	// cannot lower a range over one.
-	for _, col := range []struct{ name, value string }{
-		{"to", r.To}, {"from", r.From}, {"raw", r.Raw},
-		{"ports", r.Ports}, {"service", r.Service}, {"comment", r.Comment},
+	for name, field := range map[string]string{
+		"to": r.To, "from": r.From, "raw": r.Raw,
+		"ports": r.Ports, "service": r.Service, "comment": r.Comment,
 	} {
-		name, field := col.name, col.value
 		if field != strings.TrimSpace(field) {
 			t.Fatalf("%s field is not trimmed: %q", name, field)
 		}
