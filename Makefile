@@ -62,11 +62,17 @@ tidy:
 	$(GO) mod tidy
 
 ## screenshots: re-render the README frames from --demo (needs chrome/chromium).
+## Both backends are covered: the ufw demo for the shared screens, the
+## firewalld one for the zone view and the actions menu that only it has.
 screenshots: build
 	python3 $(KIT)/tools/render-screenshots.py \
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
 		--screen main= --screen add=a --screen delete=d \
 		--screen policies=p --screen help=?
+	python3 $(KIT)/tools/render-screenshots.py \
+		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
+		--args="--demo=firewalld" \
+		--screen firewalld= --screen firewalld-actions=x
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "name": "tui-firewall",
   "binary": "tui-firewall",
-  "tagline": "The system firewall, with every change previewed before it runs",
-  "description": "A terminal UI for the Linux firewall. It shows the rules you actually have — action, direction, ports, source, destination, app profile, IPv6 and `route` rules included — alongside the default policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows that value and hands the same one to the runner, so what you read is what executes. `ufw` today, `firewalld` behind the same interface next.\n\nRun `tui-firewall --demo` to drive an in-memory sample firewall: every key works, every command is built and previewed for real, and nothing touches your system.",
+  "tagline": "ufw and firewalld, with every change previewed before it runs",
+  "description": "A terminal UI for the Linux firewall, driving **ufw** and **firewalld**. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or zone targets and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes. On firewalld that means both lines: the change to the running firewall and the same change made permanent, with no reload and no dropped connections.\n\nRun `tui-firewall --demo` for an in-memory ufw, or `tui-firewall --demo=firewalld` for an in-memory firewalld: every key works, every command is built and previewed for real, and nothing touches your system.",
   "category": "firewall",
   "homepage": "https://github.com/tui-tools/tui-firewall",
   "repo": "https://github.com/tui-tools/tui-firewall",
@@ -32,6 +32,14 @@
       "caption": "Changing a default policy for incoming, outgoing or routed traffic"
     },
     {
+      "path": "docs/screenshots/tui-firewall-firewalld.png",
+      "caption": "A firewalld zone: every entry by kind, marked runtime-only or permanent-only"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-firewalld-actions.png",
+      "caption": "The firewalld actions menu: default zone, interfaces, masquerading, panic mode"
+    },
+    {
       "path": "docs/screenshots/tui-firewall-help.png",
       "caption": "The help screen, generated from the same action table as the key map"
     }
@@ -47,19 +55,23 @@
     },
     {
       "key": "e",
-      "action": "Enable or disable the firewall"
+      "action": "Enable or disable the firewall (ufw)"
     },
     {
       "key": "p",
-      "action": "Change a default policy"
+      "action": "Change a default policy, or a firewalld zone target"
     },
     {
       "key": "L",
-      "action": "Change the logging level"
+      "action": "Change the logging level, or the firewalld log-denied value"
     },
     {
       "key": "r",
       "action": "Reload the firewall"
+    },
+    {
+      "key": "x",
+      "action": "Actions this backend offers beyond these keys"
     },
     {
       "key": "/",
@@ -67,7 +79,7 @@
     },
     {
       "key": "[ / ]",
-      "action": "Previous / next group, on multi-group backends"
+      "action": "Previous / next group: the firewalld zones and policies"
     },
     {
       "key": "R",
@@ -114,6 +126,29 @@
       ],
       "tested": [
         "0.36.2"
+      ]
+    },
+    {
+      "name": "firewalld",
+      "binary": "firewall-cmd",
+      "versionCommand": [
+        "firewall-cmd",
+        "--version"
+      ],
+      "minimum": "0.9",
+      "searchPaths": [
+        "/usr/sbin/firewall-cmd",
+        "/sbin/firewall-cmd"
+      ],
+      "notes": [
+        {
+          "range": "==2.0.0",
+          "impact": "`--permanent --list-all-zones` prints the same settings for every zone on this release (firewalld#1152), so the permanent half of the runtime/permanent comparison is not trustworthy; 2.0.1 fixed it"
+        },
+        {
+          "range": ">=2.2",
+          "impact": "firewalld removed the lockdown feature, so no lockdown state is shown"
+        }
       ]
     }
   ],
@@ -177,7 +212,7 @@
     }
   },
   "security": {
-    "needs_sudo": "Reading ufw's state needs root, and so does every change: add, delete, enable, disable, reload, default policy and logging level. Escalation goes through `sudo -n`, which never prompts, and `--sudo \"\"` runs the command directly when you are already root.",
+    "needs_sudo": "Reading the firewall needs root, and so does every change. On ufw that is `ufw status` and add/delete/enable/disable/reload/policy/logging; on firewalld it is every `firewall-cmd` read and write. Escalation goes through `sudo -n`, which never prompts, and `--sudo \"\"` runs the command directly when you are already root.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,
@@ -198,6 +233,8 @@
   "keywords": [
     "ufw",
     "firewalld",
+    "firewall-cmd",
+    "zones",
     "iptables",
     "nftables",
     "firewall",
