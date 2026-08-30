@@ -33,8 +33,10 @@ var capabilities = firewall.Capabilities{
 	SupportsComments: true,
 	SupportsRouted:   true,
 	SupportsLogging:  true,
+	SupportsEnable:   true,
 	ServiceLabel:     "App profile",
 	GroupLabel:       "Rules",
+	LoggingLabel:     "Logging level",
 }
 
 // Capabilities reports what the ufw backend supports.
@@ -51,19 +53,19 @@ func checkGroup(group string) error {
 // BuildAddRule turns a RuleSpec into an `ufw` command. It returns an error
 // when the spec is incomplete, so the form can refuse to open the confirm
 // dialog.
-func BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Command, error) {
+func BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Change, error) {
 	if err := checkGroup(group); err != nil {
-		return firewall.Command{}, err
+		return firewall.Change{}, err
 	}
 	args, err := ruleArgs(spec)
 	if err != nil {
-		return firewall.Command{}, err
+		return firewall.Change{}, err
 	}
 	description := "Add rule"
 	if spec.Position > 0 {
 		description = fmt.Sprintf("Insert rule at position %d", spec.Position)
 	}
-	return firewall.Command{Argv: args, Description: description}, nil
+	return firewall.One(firewall.Command{Argv: args, Description: description}), nil
 }
 
 // ruleArgs assembles the argv shared by add and insert.
@@ -82,6 +84,15 @@ func ruleArgs(spec firewall.RuleSpec) ([]string, error) {
 	}
 	if strings.ContainsAny(spec.Comment, "\n\r") {
 		return nil, fmt.Errorf("comment must be a single line")
+	}
+	// ufw derives the address family from the addresses in the rule and has no
+	// flag to force one, and it logs according to the global logging level
+	// rather than per rule. Both are rejected rather than silently dropped.
+	if spec.Family != firewall.FamilyAny {
+		return nil, fmt.Errorf("ufw picks the address family from the addresses")
+	}
+	if spec.Log {
+		return nil, fmt.Errorf("ufw logs by level, not per rule")
 	}
 
 	args := []string{"ufw"}
@@ -139,65 +150,65 @@ func orAny(s string) string {
 }
 
 // BuildDeleteRule removes a rule by its number in `ufw status numbered`.
-func BuildDeleteRule(group string, rule firewall.Rule) (firewall.Command, error) {
+func BuildDeleteRule(group string, rule firewall.Rule) (firewall.Change, error) {
 	if err := checkGroup(group); err != nil {
-		return firewall.Command{}, err
+		return firewall.Change{}, err
 	}
 	number, err := strconv.Atoi(rule.ID)
 	if err != nil || number <= 0 {
-		return firewall.Command{}, fmt.Errorf("ufw: rule has no usable number (%q)", rule.ID)
+		return firewall.Change{}, fmt.Errorf("ufw: rule has no usable number (%q)", rule.ID)
 	}
-	return firewall.Command{
+	return firewall.One(firewall.Command{
 		Argv:        []string{"ufw", "--force", "delete", strconv.Itoa(number)},
 		Description: fmt.Sprintf("Delete rule %d", number),
 		Destructive: true,
-	}, nil
+	}), nil
 }
 
 // BuildSetEnabled turns the firewall on or off. `--force` skips ufw's own SSH
 // prompt, which a TUI cannot answer; tui-firewall asks for confirmation itself.
-func BuildSetEnabled(enabled bool) (firewall.Command, error) {
+func BuildSetEnabled(enabled bool) (firewall.Change, error) {
 	if enabled {
-		return firewall.Command{
+		return firewall.One(firewall.Command{
 			Argv:        []string{"ufw", "--force", "enable"},
 			Description: "Enable the firewall",
 			Destructive: true,
-		}, nil
+		}), nil
 	}
-	return firewall.Command{
+	return firewall.One(firewall.Command{
 		Argv:        []string{"ufw", "disable"},
 		Description: "Disable the firewall (all traffic allowed)",
 		Destructive: true,
-	}, nil
+	}), nil
 }
 
 // BuildReload re-applies the rule set without dropping connections.
-func BuildReload() (firewall.Command, error) {
-	return firewall.Command{
+func BuildReload() (firewall.Change, error) {
+	return firewall.One(firewall.Command{
 		Argv:        []string{"ufw", "reload"},
 		Description: "Reload the firewall",
-	}, nil
+	}), nil
 }
 
 // BuildSetPolicy sets one of the three default policies.
 func BuildSetPolicy(group string, slot firewall.PolicyDirection,
-	policy firewall.Policy) (firewall.Command, error) {
+	policy firewall.Policy) (firewall.Change, error) {
 	if err := checkGroup(group); err != nil {
-		return firewall.Command{}, err
+		return firewall.Change{}, err
 	}
 	switch slot {
 	case firewall.PolicyIncoming, firewall.PolicyOutgoing, firewall.PolicyRouted:
 	default:
-		return firewall.Command{}, fmt.Errorf("ufw: unsupported policy slot %q", slot)
+		return firewall.Change{}, fmt.Errorf("ufw: unsupported policy slot %q", slot)
 	}
 	if !validPolicy(policy) {
-		return firewall.Command{}, fmt.Errorf("ufw: unknown policy %q", policy)
+		return firewall.Change{}, fmt.Errorf("ufw: unknown policy %q", policy)
 	}
-	return firewall.Command{
+	return firewall.One(firewall.Command{
 		Argv:        []string{"ufw", "default", string(policy), string(slot)},
 		Description: fmt.Sprintf("Set default %s policy to %s", slot, policy),
 		Destructive: true,
-	}, nil
+	}), nil
 }
 
 // validPolicy reports whether p is one of the accepted default policies.
@@ -211,14 +222,14 @@ func validPolicy(p firewall.Policy) bool {
 }
 
 // BuildSetLogging sets the logging level.
-func BuildSetLogging(level string) (firewall.Command, error) {
+func BuildSetLogging(level string) (firewall.Change, error) {
 	for _, known := range capabilities.LogLevels {
 		if level == known {
-			return firewall.Command{
+			return firewall.One(firewall.Command{
 				Argv:        []string{"ufw", "logging", level},
 				Description: fmt.Sprintf("Set logging to %s", level),
-			}, nil
+			}), nil
 		}
 	}
-	return firewall.Command{}, fmt.Errorf("ufw: unknown logging level %q", level)
+	return firewall.Change{}, fmt.Errorf("ufw: unknown logging level %q", level)
 }

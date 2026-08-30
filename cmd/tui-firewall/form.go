@@ -57,7 +57,10 @@ type ruleForm struct {
 	caps   firewall.Capabilities
 }
 
-// newRuleForm builds the form for a backend and its service list.
+// newRuleForm builds the form for a backend and its service list. Which
+// fields exist is the backend's decision: an address family and a per-rule log
+// flag only appear where the backend can express them, which on firewalld is
+// the difference between a plain `--add-service` and a rich rule.
 func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 	text := func(placeholder string) textinput.Model {
 		ti := textinput.New()
@@ -90,6 +93,16 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 		{key: "from", label: "From", kind: fieldText,
 			input: text("any, 10.0.0.0/8, fd00::/8")},
 		{key: "to", label: "To", kind: fieldText, input: text("any, 192.168.1.10")},
+	}
+	if caps.SupportsFamily {
+		fields = append(fields, formField{key: "family", label: "Family",
+			kind: fieldChoice, options: []string{noneOption, "v4", "v6"},
+			help: "Leave empty to take the family from the addresses."})
+	}
+	if caps.SupportsLog {
+		fields = append(fields, formField{key: "log", label: "Log matches",
+			kind: fieldChoice, options: []string{"no", "yes"},
+			help: "Logs packets this rule matches, rate-limited."})
 	}
 	if caps.SupportsComments {
 		fields = append(fields, formField{key: "comment", label: "Comment",
@@ -202,6 +215,8 @@ func (f ruleForm) spec() (firewall.RuleSpec, error) {
 		From:      f.get("from"),
 		To:        f.get("to"),
 		Comment:   f.get("comment"),
+		Family:    firewall.Family(f.get("family")),
+		Log:       f.get("log") == "yes",
 		Routed:    f.get("routed") == "yes",
 	}
 	if position := f.get("position"); position != "" {
@@ -275,4 +290,27 @@ func renderIdleText(t theme.Theme, field formField, width int) string {
 		return t.Muted.Render(ui.Truncate(field.input.Placeholder, width))
 	}
 	return t.Base.Render(ui.Truncate(value, width))
+}
+
+// setFieldForTest sets a field's value by key, whatever its kind, and leaves
+// the cursor on it. It exists so a test can fill the form without simulating
+// every keystroke; nothing in the running program uses it.
+func (f *ruleForm) setFieldForTest(key, value string) {
+	for i := range f.fields {
+		if f.fields[i].key != key {
+			continue
+		}
+		f.active = i
+		f.focusActive()
+		if f.fields[i].kind == fieldText {
+			f.fields[i].input.SetValue(value)
+			return
+		}
+		for j, option := range f.fields[i].options {
+			if option == value {
+				f.fields[i].choice = j
+				return
+			}
+		}
+	}
 }

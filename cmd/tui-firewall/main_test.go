@@ -24,11 +24,36 @@ func TestParseFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseFlags: %v", err)
 	}
-	if !opts.demo || opts.backend != "ufw" {
-		t.Errorf("opts = %+v", opts)
+	if !opts.demo.on || opts.demo.backend != backends.BackendUFW {
+		t.Errorf("demo = %+v, want ufw", opts.demo)
+	}
+	if opts.backend != "ufw" {
+		t.Errorf("backend = %q", opts.backend)
 	}
 	if opts.sudoSet {
 		t.Error("sudoSet should be false when -sudo is absent")
+	}
+}
+
+func TestParseFlagsDemoBackend(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer func() { _ = devNull.Close() }()
+
+	// `--demo` must keep working on its own while also taking a backend name,
+	// which is what IsBoolFlag buys.
+	opts, err := parseFlags([]string{"--demo=firewalld"}, devNull)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if !opts.demo.on || opts.demo.backend != backends.BackendFirewalld {
+		t.Errorf("demo = %+v, want firewalld", opts.demo)
+	}
+
+	if _, err := parseFlags([]string{"--demo=iptables"}, devNull); err == nil {
+		t.Error("an unknown demo backend must be rejected")
 	}
 }
 
@@ -68,11 +93,28 @@ func TestDefaultsCoverEveryFlag(t *testing.T) {
 }
 
 func TestPickBackendDemo(t *testing.T) {
-	backend, err := pickBackend(baseConfig(), options{demo: true})
+	backend, err := pickBackend(baseConfig(),
+		options{demo: demoFlag{on: true, backend: backends.BackendUFW}})
 	if err != nil {
 		t.Fatalf("pickBackend: %v", err)
 	}
 	if backend.Name() != "demo" {
 		t.Errorf("Name = %q, want demo", backend.Name())
+	}
+}
+
+func TestPickBackendDemoFirewalld(t *testing.T) {
+	// The firewalld demo must be the firewalld backend, not a relabelled ufw:
+	// it is what proves the firewalld mapping renders.
+	backend, err := pickBackend(baseConfig(),
+		options{demo: demoFlag{on: true, backend: backends.BackendFirewalld}})
+	if err != nil {
+		t.Fatalf("pickBackend: %v", err)
+	}
+	if backend.Name() != backends.BackendFirewalld {
+		t.Errorf("Name = %q, want firewalld", backend.Name())
+	}
+	if got := backend.Capabilities().GroupLabel; got != "Zone" {
+		t.Errorf("GroupLabel = %q, want Zone", got)
 	}
 }

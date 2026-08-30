@@ -2,6 +2,7 @@ package ufw
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-kit/runner"
@@ -57,8 +58,10 @@ func (r *Real) Describe() string { return r.run.Describe() }
 // Capabilities reports what this backend supports.
 func (r *Real) Capabilities() firewall.Capabilities { return capabilities }
 
-// Preview renders the exact command line Run will execute.
-func (r *Real) Preview(cmd firewall.Command) string { return r.run.Preview(cmd) }
+// Preview renders the exact command lines Run will execute.
+func (r *Real) Preview(change firewall.Change) string {
+	return firewall.PreviewChange(r.run, change)
+}
 
 // Load reads status (verbose + numbered) and the app profile list. Every ufw
 // read needs root, so these go through the runner's privileged read path.
@@ -80,36 +83,44 @@ func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 	return model, nil
 }
 
-// Run executes a previewed command.
-func (r *Real) Run(ctx context.Context, cmd firewall.Command) (string, error) {
-	return r.run.Run(ctx, cmd)
+// Run executes a previewed change.
+func (r *Real) Run(ctx context.Context, change firewall.Change) (string, error) {
+	return firewall.RunChange(ctx, r.run, change)
 }
 
 // BuildAddRule creates a rule.
-func (r *Real) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Command, error) {
+func (r *Real) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Change, error) {
 	return BuildAddRule(group, spec)
 }
 
 // BuildDeleteRule removes a rule.
-func (r *Real) BuildDeleteRule(group string, rule firewall.Rule) (firewall.Command, error) {
+func (r *Real) BuildDeleteRule(group string, rule firewall.Rule) (firewall.Change, error) {
 	return BuildDeleteRule(group, rule)
 }
 
 // BuildSetEnabled turns the firewall on or off.
-func (r *Real) BuildSetEnabled(enabled bool) (firewall.Command, error) {
+func (r *Real) BuildSetEnabled(enabled bool) (firewall.Change, error) {
 	return BuildSetEnabled(enabled)
 }
 
 // BuildReload re-applies the rule set.
-func (r *Real) BuildReload() (firewall.Command, error) { return BuildReload() }
+func (r *Real) BuildReload() (firewall.Change, error) { return BuildReload() }
 
 // BuildSetPolicy changes one default policy.
 func (r *Real) BuildSetPolicy(group string, slot firewall.PolicyDirection,
-	policy firewall.Policy) (firewall.Command, error) {
+	policy firewall.Policy) (firewall.Change, error) {
 	return BuildSetPolicy(group, slot, policy)
 }
 
 // BuildSetLogging changes the logging level.
-func (r *Real) BuildSetLogging(level string) (firewall.Command, error) {
+func (r *Real) BuildSetLogging(level string) (firewall.Change, error) {
 	return BuildSetLogging(level)
+}
+
+// Extras reports that ufw has no actions beyond the common set.
+func (r *Real) Extras(_ firewall.Model, _ string) []firewall.Extra { return nil }
+
+// BuildExtra always fails: ufw offers no extra actions.
+func (r *Real) BuildExtra(_, id string, _ []string) (firewall.Change, error) {
+	return firewall.Change{}, fmt.Errorf("ufw: no extra action %q", id)
 }

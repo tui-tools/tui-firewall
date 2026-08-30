@@ -74,14 +74,42 @@ const (
 	PolicyTarget PolicyDirection = "target"
 )
 
+// Kind names what sort of entry a Rule is, for backends whose groups hold more
+// than one species. ufw has a single kind and leaves it empty; firewalld fills
+// it, because a zone mixes services, ports, rich rules, bound sources and
+// assigned interfaces, and deleting each takes a different argument.
+//
+// The UI only ever displays a kind and passes it back; it never branches on
+// the value, which is why the list is open rather than an enum.
+const (
+	KindService     = "service"
+	KindPort        = "port"
+	KindProtocol    = "protocol"
+	KindSourcePort  = "source-port"
+	KindForwardPort = "forward-port"
+	KindRich        = "rich"
+	KindSource      = "source"
+	KindInterface   = "interface"
+	KindMasquerade  = "masquerade"
+	KindForward     = "forward"
+	KindICMPBlock   = "icmp-block"
+)
+
 // Rule is one entry of a Group, in backend-neutral terms.
 type Rule struct {
 	// ID identifies the rule for deletion. It is opaque to the UI: ufw uses
-	// the rule number, firewalld will use the rule's own textual form.
+	// the rule number, firewalld uses the entry's own textual form.
 	ID string
 	// Index is the 1-based display position within its group; 0 when the
 	// backend does not order rules.
 	Index int
+	// Kind names the species of entry (see the Kind* constants); empty on a
+	// backend whose group holds only one.
+	Kind string
+	// Note is a short backend-supplied annotation shown beside the rule —
+	// firewalld uses it to mark an entry that exists only in the runtime
+	// configuration or only in the permanent one.
+	Note string
 
 	Action    Action
 	Direction Direction
@@ -152,7 +180,10 @@ type Model struct {
 	Logging string
 	// LoggingOn reports whether logging is active at all.
 	LoggingOn bool
-	Groups    []Group
+	// Warning is a banner the backend wants shown about the current state.
+	// firewalld uses it for panic mode, in which every packet is dropped.
+	Warning string
+	Groups  []Group
 	// Services lists the named services or app profiles offered by the picker.
 	Services []string
 }
@@ -177,6 +208,82 @@ func (m Model) Group(name string) (Group, bool) {
 // command shown in the dialog is the command that executes.
 type Command = runner.Command
 
+// Change is everything one confirmation applies: an ordered list of commands,
+// with the description and the danger flag the dialog is painted from.
+//
+// It exists because not every backend expresses a change in one invocation.
+// firewalld keeps a runtime configuration and a permanent one, and applying a
+// change to both means running the same command twice, once with
+// `--permanent`. Making that a list rather than a hidden second exec keeps the
+// promise intact: every line the dialog shows is a line that runs, and nothing
+// else does.
+//
+// Commands run in order and stop at the first failure.
+type Change struct {
+	// Description is the title of the confirm dialog.
+	Description string
+	// Destructive paints the dialog in the danger colour.
+	Destructive bool
+	// Note is one line explaining how the change is applied, shown in the
+	// dialog above the commands ("applied to the running firewall and to the
+	// permanent configuration; no reload, so connections are not dropped").
+	Note string
+	// Commands is what will run, in order.
+	Commands []Command
+}
+
+// One wraps a single Command as a Change, carrying its description and danger
+// flag up to the dialog. It is what a backend with nothing to sequence uses.
+func One(cmd Command) Change {
+	return Change{
+		Description: cmd.Description,
+		Destructive: cmd.Destructive,
+		Commands:    []Command{cmd},
+	}
+}
+
+// Empty reports a Change with nothing to run.
+func (c Change) Empty() bool { return len(c.Commands) == 0 }
+
+// String renders every command, one per line, with no privilege prefix. It is
+// the backend-independent rendering; a preview adds the prefix the runner will
+// really use.
+func (c Change) String() string {
+	lines := make([]string, 0, len(c.Commands))
+	for _, cmd := range c.Commands {
+		lines = append(lines, cmd.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+// PreviewChange renders every command of a Change, one per line, exactly as
+// the given runner would execute it. Backends delegate their Preview here so
+// the dialog and the execution loop below cannot drift apart.
+func PreviewChange(r runner.Interface, change Change) string {
+	lines := make([]string, 0, len(change.Commands))
+	for _, cmd := range change.Commands {
+		lines = append(lines, r.Preview(cmd))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// RunChange executes a Change through a runner, in order, and stops at the
+// first command that fails — a half-applied change is reported as such rather
+// than pressed on with.
+func RunChange(ctx context.Context, r runner.Interface, change Change) (string, error) {
+	var outputs []string
+	for _, cmd := range change.Commands {
+		out, err := r.Run(ctx, cmd)
+		if out = strings.TrimSpace(out); out != "" {
+			outputs = append(outputs, out)
+		}
+		if err != nil {
+			return strings.Join(outputs, "\n"), err
+		}
+	}
+	return strings.Join(outputs, "\n"), nil
+}
+
 // RuleSpec describes a rule the user wants to create. Backends translate it
 // into their own syntax; unsupported fields are rejected with a clear error.
 type RuleSpec struct {
@@ -189,10 +296,47 @@ type RuleSpec struct {
 	From    string
 	To      string
 	Comment string
+	// Family restricts the rule to one address family. Backends that cannot
+	// express it (ufw derives it from the addresses) reject a non-empty value.
+	Family Family
+	// Log asks the backend to log packets the rule matches.
+	Log bool
 	// Routed asks for a forwarding rule.
 	Routed bool
 	// Position, when > 0, inserts the rule at that 1-based position.
 	Position int
+}
+
+// ExtraStep is one answer an Extra needs before its command can be built. The
+// UI asks for the steps in order: a picker when Options is set, a text prompt
+// otherwise.
+type ExtraStep struct {
+	// Prompt is the dialog title.
+	Prompt string
+	// Options are the choices; empty asks for free text instead.
+	Options []string
+	// Placeholder hints at the expected free-text answer.
+	Placeholder string
+	// Current preselects an option, or prefills the text field.
+	Current string
+}
+
+// Extra is an action a backend offers beyond the set every firewall shares.
+// The UI lists them in a menu, collects the steps and previews the resulting
+// Change exactly like any other mutation — so a backend can add an operation
+// without the UI learning what it means, let alone which binary provides it.
+type Extra struct {
+	// ID is passed back to BuildExtra; it is never shown.
+	ID string
+	// Label is the menu entry.
+	Label string
+	// Steps are the answers to collect, in order.
+	Steps []ExtraStep
+	// Danger paints the confirm dialog in the danger colour.
+	Danger bool
+	// Warning is an extra line shown in the confirm dialog, for an action
+	// whose consequences deserve spelling out.
+	Warning string
 }
 
 // Capabilities tells the UI which options a backend supports, so menus and
@@ -210,11 +354,24 @@ type Capabilities struct {
 	SupportsRouted bool
 	// SupportsLogging reports whether SetLogging is available.
 	SupportsLogging bool
+	// SupportsFamily reports whether RuleSpec.Family is honoured.
+	SupportsFamily bool
+	// SupportsLog reports whether RuleSpec.Log is honoured.
+	SupportsLog bool
+	// SupportsEnable reports whether the firewall can be turned on and off
+	// through this backend. firewalld cannot: it is a system service, and
+	// starting services is not this tool's job.
+	SupportsEnable bool
+	// EnableHint explains what to do instead when SupportsEnable is false.
+	EnableHint string
 	// ServiceLabel names the service concept in the UI ("App profile",
 	// "Service").
 	ServiceLabel string
 	// GroupLabel names the group concept in the UI ("Rules", "Zone").
 	GroupLabel string
+	// LoggingLabel names the logging concept in the UI ("Logging level",
+	// "Log denied").
+	LoggingLabel string
 }
 
 // Backend is the boundary between the UI and the machine. Load reads state;
@@ -228,25 +385,33 @@ type Backend interface {
 	// Capabilities reports what this backend supports.
 	Capabilities() Capabilities
 
-	// Preview renders the exact command line that Run will execute, including
-	// any privilege wrapper. This is the text shown in the confirm dialog.
-	Preview(cmd Command) string
+	// Preview renders the exact command lines that Run will execute, one per
+	// line, including any privilege wrapper. This is the text shown in the
+	// confirm dialog.
+	Preview(change Change) string
 
 	// Load reads the current firewall state.
 	Load(ctx context.Context) (Model, error)
-	// Run executes a previously previewed command.
-	Run(ctx context.Context, cmd Command) (string, error)
+	// Run executes a previously previewed change, in order, stopping at the
+	// first command that fails.
+	Run(ctx context.Context, change Change) (string, error)
 
 	// BuildAddRule creates a rule in the named group.
-	BuildAddRule(group string, spec RuleSpec) (Command, error)
+	BuildAddRule(group string, spec RuleSpec) (Change, error)
 	// BuildDeleteRule removes an existing rule from the named group.
-	BuildDeleteRule(group string, rule Rule) (Command, error)
+	BuildDeleteRule(group string, rule Rule) (Change, error)
 	// BuildSetEnabled turns the firewall on or off.
-	BuildSetEnabled(enabled bool) (Command, error)
+	BuildSetEnabled(enabled bool) (Change, error)
 	// BuildReload re-applies the rule set.
-	BuildReload() (Command, error)
+	BuildReload() (Change, error)
 	// BuildSetPolicy changes one default policy of a group.
-	BuildSetPolicy(group string, slot PolicyDirection, policy Policy) (Command, error)
+	BuildSetPolicy(group string, slot PolicyDirection, policy Policy) (Change, error)
 	// BuildSetLogging changes the logging level.
-	BuildSetLogging(level string) (Command, error)
+	BuildSetLogging(level string) (Change, error)
+
+	// Extras lists the backend-specific actions offered for the given group,
+	// given the state that was last loaded. A backend with none returns nil.
+	Extras(model Model, group string) []Extra
+	// BuildExtra turns an Extra and its collected answers into a Change.
+	BuildExtra(group, id string, args []string) (Change, error)
 }

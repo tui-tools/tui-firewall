@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-kit/compat"
 )
@@ -34,10 +35,16 @@ type checkReport struct {
 	// Groups and Rules are the totals across the model.
 	Groups int `json:"groups"`
 	Rules  int `json:"rules"`
-	// Compat is what the backend version probe found. It is reported rather
-	// than asserted: an untested version is a fact about the machine, not a
-	// failure of the read path.
+	// Compat is what the backend version probe found, for the backend that
+	// was selected and only that one: probing the other would run a binary
+	// nobody asked this tool to touch. It is reported rather than asserted —
+	// an untested version is a fact about the machine, not a failure of the
+	// read path.
 	Compat compat.Result `json:"compat"`
+	// Backends is what the detector saw for every backend this tool knows,
+	// installed or not, so a reader can tell "firewalld was chosen" from
+	// "ufw is not here" without running the detection again.
+	Backends []backends.State `json:"backends"`
 	// Model is the parsed state in full.
 	Model firewall.Model `json:"model"`
 }
@@ -47,12 +54,11 @@ type checkReport struct {
 // turns into a non-zero exit — so a caller can treat the exit code alone as
 // the verdict.
 //
-// A backend that is not implemented (firewalld today) fails here, and that is
-// the correct result: the tool cannot read that machine's firewall, and a
-// smoke test asserting "firewalld is still a stub" asserts exactly this
-// failure.
+// A backend that cannot be read fails here, and that is the correct result:
+// the exit code alone says whether this machine's firewall is legible to the
+// tool.
 func runCheck(backend firewall.Backend, backendCompat compat.Result,
-	out io.Writer) error {
+	states []backends.State, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
 
@@ -70,6 +76,7 @@ func runCheck(backend firewall.Backend, backendCompat compat.Result,
 		Logging:  model.Logging,
 		Groups:   len(model.Groups),
 		Compat:   backendCompat,
+		Backends: states,
 		Model:    model,
 	}
 	for _, group := range model.Groups {

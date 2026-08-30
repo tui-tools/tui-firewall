@@ -1,7 +1,7 @@
 // Command tui-firewall is a terminal UI for the system firewall. It shows the
 // current rules and previews the exact command line of every change before
-// running it. ufw is the backend implemented today; the code is written
-// against a generic interface so firewalld can follow.
+// running it. ufw and firewalld are both driven, behind one generic interface,
+// and the UI never builds a command line for either.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/firewalld"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
 	"github.com/tui-tools/tui-kit/config"
 	"github.com/tui-tools/tui-kit/theme"
@@ -35,9 +36,48 @@ func defaults() map[string]string {
 	}
 }
 
+// demoFlag is the value of --demo: which backend the in-memory sample
+// firewall imitates.
+//
+// It is a flag.Value rather than a bool so that both spellings work: plain
+// `--demo` gives the default backend, and `--demo=firewalld` gives the other
+// one. IsBoolFlag is what lets the bare form parse; without it the flag
+// package would swallow the next argument as its value.
+type demoFlag struct {
+	on      bool
+	backend string
+}
+
+// String renders the flag's current value for the usage text.
+func (d *demoFlag) String() string {
+	if d == nil || !d.on {
+		return ""
+	}
+	return d.backend
+}
+
+// Set accepts the bare form ("true", from `--demo`) and a backend name.
+func (d *demoFlag) Set(value string) error {
+	d.on = true
+	switch value {
+	case "", "true":
+		d.backend = backends.BackendUFW
+		return nil
+	case backends.BackendUFW, backends.BackendFirewalld:
+		d.backend = value
+		return nil
+	default:
+		return fmt.Errorf("unknown demo backend %q: use %s or %s",
+			value, backends.BackendUFW, backends.BackendFirewalld)
+	}
+}
+
+// IsBoolFlag lets `--demo` stand on its own.
+func (d *demoFlag) IsBoolFlag() bool { return true }
+
 // options holds the parsed command line.
 type options struct {
-	demo        bool
+	demo        demoFlag
 	check       bool
 	backend     string
 	themePath   string
@@ -53,8 +93,9 @@ func parseFlags(args []string, out *os.File) (options, error) {
 	var opts options
 	fs := flag.NewFlagSet("tui-firewall", flag.ContinueOnError)
 	fs.SetOutput(out)
-	fs.BoolVar(&opts.demo, "demo", false,
-		"run against sample data, without touching the system firewall")
+	fs.Var(&opts.demo, "demo",
+		"run against sample data, without touching the system firewall; "+
+			"--demo=firewalld shows the firewalld model instead of the ufw one")
 	fs.BoolVar(&opts.check, "check", false,
 		"read the firewall and print the parsed model as JSON, then exit "+
 			"(no UI, no changes); exit 1 if the backend cannot be read")
@@ -126,10 +167,11 @@ func run(args []string) error {
 	// message the UI would have shown.
 	// The backend version is probed once, here, and used by both paths: the
 	// header shows it, --check reports it, and the smoke test records it.
-	backendCompat := probeCompat(context.Background(), backend.Name(), opts.demo)
+	backendCompat := probeCompat(context.Background(), backend.Name(), opts.demo.on)
 
 	if opts.check {
-		return runCheck(backend, backendCompat, os.Stdout)
+		return runCheck(backend, backendCompat, backends.Inspect(backend.Name()),
+			os.Stdout)
 	}
 
 	// The configured theme is handed to the kit through the same variable the
@@ -162,9 +204,14 @@ func applyOverrides(cfg *config.Config, opts options) {
 	}
 }
 
-// pickBackend returns the demo backend or the configured real one.
+// pickBackend returns the demo backend or the configured real one. Each
+// backend brings its own fake, so `--demo=firewalld` exercises the firewalld
+// mapping and command builders rather than a firewalld-flavoured ufw.
 func pickBackend(cfg config.Config, opts options) (firewall.Backend, error) {
-	if opts.demo {
+	if opts.demo.on {
+		if opts.demo.backend == backends.BackendFirewalld {
+			return firewalld.NewFake(), nil
+		}
 		return ufw.NewFake(), nil
 	}
 	return backends.Select(cfg)

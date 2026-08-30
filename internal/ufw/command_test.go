@@ -115,14 +115,19 @@ func TestBuildAddRule(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd, err := BuildAddRule(GroupName, tc.spec)
+			change, err := BuildAddRule(GroupName, tc.spec)
 			if err != nil {
 				t.Fatalf("BuildAddRule: %v", err)
 			}
-			if !reflect.DeepEqual(cmd.Argv, tc.want) {
-				t.Errorf("Argv\n got: %q\nwant: %q", cmd.Argv, tc.want)
+			// ufw applies a change in one invocation, so a change it builds
+			// always holds exactly one command.
+			if len(change.Commands) != 1 {
+				t.Fatalf("Commands = %d, want 1", len(change.Commands))
 			}
-			if cmd.Description == "" {
+			if !reflect.DeepEqual(change.Commands[0].Argv, tc.want) {
+				t.Errorf("Argv\n got: %q\nwant: %q", change.Commands[0].Argv, tc.want)
+			}
+			if change.Description == "" {
 				t.Error("Description should not be empty")
 			}
 		})
@@ -331,7 +336,7 @@ func TestFakeLoadReturnsCopy(t *testing.T) {
 
 func TestFakeRejectsUnknownCommand(t *testing.T) {
 	_, err := NewFake().Run(context.Background(),
-		firewall.Command{Argv: []string{"ufw", "show", "raw"}})
+		firewall.One(firewall.Command{Argv: []string{"ufw", "show", "raw"}}))
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Errorf("err = %v, want an unsupported-command error", err)
 	}

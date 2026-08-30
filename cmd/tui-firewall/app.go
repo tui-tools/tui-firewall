@@ -21,6 +21,7 @@ const (
 	modeTable mode = iota
 	modeConfirm
 	modeFilter
+	modePrompt
 	modePicker
 	modeForm
 	modeHelp
@@ -36,6 +37,8 @@ const (
 	pickerPolicyValue
 	pickerFormChoice
 	pickerGroup
+	pickerExtra
+	pickerExtraStep
 )
 
 // app is the tui-firewall Bubble Tea model.
@@ -67,6 +70,11 @@ type app struct {
 	pickerFor pickerTarget
 	// pendingSlot remembers which policy slot the user picked first.
 	pendingSlot firewall.PolicyDirection
+	// pendingExtra remembers the backend action being assembled.
+	pendingExtra pendingExtra
+	// extras is the action list the menu was built from, so a choice can be
+	// matched back to the action it names.
+	extras []firewall.Extra
 
 	status     string
 	statusKind ui.StatusKind
@@ -86,9 +94,16 @@ type loadedMsg struct {
 
 // ranMsg carries the result of a Run.
 type ranMsg struct {
-	cmd    firewall.Command
+	change firewall.Change
 	output string
 	err    error
+}
+
+// pendingExtra is a backend action part-way through collecting its answers.
+type pendingExtra struct {
+	extra firewall.Extra
+	// args holds the answers given so far, one per step.
+	args []string
 }
 
 // newApp builds the model around a backend.
@@ -130,14 +145,14 @@ func (a *app) load() tea.Cmd {
 	}
 }
 
-// run executes a confirmed command in the background.
-func (a *app) run(cmd firewall.Command) tea.Cmd {
+// run executes a confirmed change in the background.
+func (a *app) run(change firewall.Change) tea.Cmd {
 	backend := a.backend
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		out, err := backend.Run(ctx, cmd)
-		return ranMsg{cmd: cmd, output: out, err: err}
+		out, err := backend.Run(ctx, change)
+		return ranMsg{change: change, output: out, err: err}
 	}
 }
 
@@ -185,7 +200,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if summary == "" {
 			summary = "done"
 		}
-		a.setStatusf(ui.StatusOK, "%s: %s", msg.cmd.Description, firstLine(summary))
+		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
 		a.loading = true
 		return a, a.load()
 
@@ -194,7 +209,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Anything else (cursor blink, …) only concerns an open text input.
-	if a.mode == modeFilter {
+	if a.mode == modeFilter || a.mode == modePrompt {
 		cmd, _ := a.input.Update(msg)
 		return a, cmd
 	}
@@ -220,6 +235,8 @@ func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleConfirm(msg)
 	case modeFilter:
 		return a.handleFilter(msg)
+	case modePrompt:
+		return a.handlePrompt(msg)
 	case modePicker:
 		return a.handlePicker(msg)
 	case modeForm:
@@ -240,15 +257,16 @@ func (a *app) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	a.mode = modeTable
 	confirmed := a.confirm.Confirmed
-	cmd, ok := a.confirm.Payload.(firewall.Command)
+	change, ok := a.confirm.Payload.(firewall.Change)
 	a.confirm = ui.Confirm{}
 	if !confirmed || !ok {
 		a.setStatus(ui.StatusInfo, "cancelled")
 		return a, nil
 	}
 	a.busy = true
-	a.setStatusf(ui.StatusInfo, "running %s…", a.backend.Preview(cmd))
-	return a, a.run(cmd)
+	a.setStatusf(ui.StatusInfo, "running %s…",
+		firstLine(a.backend.Preview(change)))
+	return a, a.run(change)
 }
 
 // handleFilter resolves the filter prompt.
@@ -270,6 +288,26 @@ func (a *app) handleFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// handlePrompt resolves a free-text answer an action asked for. It is a mode
+// of its own rather than the filter prompt because the filter narrows the view
+// as the user types, while this one must not act until it is submitted.
+func (a *app) handlePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cmd, _ := a.input.Update(msg)
+	if !a.input.Done {
+		return a, cmd
+	}
+	value := a.input.Value()
+	accepted := a.input.Accepted
+	a.input = ui.Input{}
+	a.mode = modeTable
+	if !accepted {
+		a.pendingExtra = pendingExtra{}
+		a.setStatus(ui.StatusInfo, "cancelled")
+		return a, nil
+	}
+	return a, a.answerExtra(value)
+}
+
 // handlePicker resolves whichever picker is open.
 func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a.picker.Update(msg)
@@ -287,13 +325,14 @@ func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target == pickerFormChoice {
 			a.mode = modeForm
 		}
+		a.pendingExtra = pendingExtra{}
 		return a, nil
 	}
 
 	switch target {
 	case pickerLogging:
 		a.mode = modeTable
-		return a, a.buildAndConfirm("Set logging level", func() (firewall.Command, error) {
+		return a, a.buildAndConfirm(a.loggingLabel(), func() (firewall.Change, error) {
 			return a.backend.BuildSetLogging(choice)
 		})
 	case pickerPolicySlot:
@@ -302,7 +341,7 @@ func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case pickerPolicyValue:
 		a.mode = modeTable
 		slot := a.pendingSlot
-		return a, a.buildAndConfirm("Change default policy", func() (firewall.Command, error) {
+		return a, a.buildAndConfirm("Change default policy", func() (firewall.Change, error) {
 			return a.backend.BuildSetPolicy(a.group, slot, firewall.Policy(choice))
 		})
 	case pickerGroup:
@@ -315,6 +354,10 @@ func (a *app) handlePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.form.setActiveValue(choice)
 		a.mode = modeForm
 		return a, nil
+	case pickerExtra:
+		return a, a.startExtra(choice)
+	case pickerExtraStep:
+		return a, a.answerExtra(choice)
 	default:
 		a.mode = modeTable
 		return a, nil
@@ -365,18 +408,12 @@ func (a *app) submitForm() tea.Cmd {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	cmd, err := a.backend.BuildAddRule(a.group, spec)
+	change, err := a.backend.BuildAddRule(a.group, spec)
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	a.mode = modeConfirm
-	a.confirm = ui.Confirm{
-		Title:   cmd.Description,
-		Body:    "The firewall will be changed as follows.",
-		Command: a.backend.Preview(cmd),
-		Payload: cmd,
-	}
+	a.openConfirm(change.Description, "The firewall will be changed as follows.", change)
 	return nil
 }
 
@@ -420,6 +457,8 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openPolicySlotPicker()
 	case "L":
 		return a, a.openLoggingPicker()
+	case "x":
+		return a, a.openExtrasMenu()
 	case "]", "tab":
 		a.cycleGroup(1)
 	case "[", "shift+tab":
@@ -431,21 +470,31 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // buildAndConfirm runs a command builder and opens the confirm dialog, or
 // reports the builder's error in the status line.
 func (a *app) buildAndConfirm(title string,
-	build func() (firewall.Command, error)) tea.Cmd {
-	cmd, err := build()
+	build func() (firewall.Change, error)) tea.Cmd {
+	change, err := build()
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
+	a.openConfirm(title, change.Description+".", change)
+	return nil
+}
+
+// openConfirm shows the preview of a change. The backend's own note about how
+// the change is applied is appended to the body, because on firewalld that is
+// the difference between two command lines and a reload.
+func (a *app) openConfirm(title, body string, change firewall.Change) {
+	if change.Note != "" {
+		body = strings.TrimSpace(body + "\n" + change.Note + ".")
+	}
 	a.mode = modeConfirm
 	a.confirm = ui.Confirm{
 		Title:   title,
-		Body:    cmd.Description + ".",
-		Command: a.backend.Preview(cmd),
-		Danger:  cmd.Destructive,
-		Payload: cmd,
+		Body:    body,
+		Command: a.backend.Preview(change),
+		Danger:  change.Destructive,
+		Payload: change,
 	}
-	return nil
 }
 
 // confirmDelete asks before deleting the selected rule.
@@ -455,26 +504,28 @@ func (a *app) confirmDelete() tea.Cmd {
 		a.setStatus(ui.StatusWarn, "no rule selected")
 		return nil
 	}
-	cmd, err := a.backend.BuildDeleteRule(a.group, rule)
+	change, err := a.backend.BuildDeleteRule(a.group, rule)
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	a.mode = modeConfirm
-	a.confirm = ui.Confirm{
-		Title:   cmd.Description,
-		Body:    "Rule: " + describeRule(rule),
-		Command: a.backend.Preview(cmd),
-		Danger:  true,
-		Payload: cmd,
-	}
+	change.Destructive = true
+	a.openConfirm(change.Description, "Rule: "+describeRule(rule), change)
 	return nil
 }
 
 // confirmToggle asks before enabling or disabling the firewall.
 func (a *app) confirmToggle() tea.Cmd {
+	if !a.caps.SupportsEnable {
+		hint := a.caps.EnableHint
+		if hint == "" {
+			hint = "this backend cannot turn the firewall on and off"
+		}
+		a.setStatus(ui.StatusWarn, hint)
+		return nil
+	}
 	enable := !a.model.Enabled
-	cmd, err := a.backend.BuildSetEnabled(enable)
+	change, err := a.backend.BuildSetEnabled(enable)
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
@@ -486,14 +537,8 @@ func (a *app) confirmToggle() tea.Cmd {
 	if enable {
 		body += "\nMake sure a rule allows your SSH session before confirming."
 	}
-	a.mode = modeConfirm
-	a.confirm = ui.Confirm{
-		Title:   cmd.Description,
-		Body:    body,
-		Command: a.backend.Preview(cmd),
-		Danger:  true,
-		Payload: cmd,
-	}
+	change.Destructive = true
+	a.openConfirm(change.Description, body, change)
 	return nil
 }
 
@@ -503,7 +548,7 @@ func (a *app) openLoggingPicker() tea.Cmd {
 		a.setStatus(ui.StatusWarn, "this backend does not expose logging levels")
 		return nil
 	}
-	a.picker = ui.NewPicker("Logging level", a.caps.LogLevels, a.model.Logging)
+	a.picker = ui.NewPicker(a.loggingLabel(), a.caps.LogLevels, a.model.Logging)
 	a.pickerFor = pickerLogging
 	a.mode = modePicker
 	return nil
@@ -537,6 +582,97 @@ func (a *app) openPolicyValuePicker() tea.Cmd {
 		string(currentPolicy(group, a.pendingSlot)))
 	a.pickerFor = pickerPolicyValue
 	a.mode = modePicker
+	return nil
+}
+
+// loggingLabel names the logging concept the way the backend does: a level
+// for ufw, a log-denied value for firewalld.
+func (a *app) loggingLabel() string {
+	if a.caps.LoggingLabel != "" {
+		return a.caps.LoggingLabel
+	}
+	return "Logging"
+}
+
+// openExtrasMenu lists the actions the backend offers beyond the common set.
+// The UI knows none of them by name: it renders the labels, collects the
+// answers and previews whatever Change comes back.
+func (a *app) openExtrasMenu() tea.Cmd {
+	a.extras = a.backend.Extras(a.model, a.group)
+	if len(a.extras) == 0 {
+		a.setStatus(ui.StatusInfo, "this backend has no actions beyond the keys above")
+		return nil
+	}
+	labels := make([]string, 0, len(a.extras))
+	for _, extra := range a.extras {
+		labels = append(labels, extra.Label)
+	}
+	a.picker = ui.NewPicker(a.backend.Name()+" actions", labels, "")
+	a.pickerFor = pickerExtra
+	a.mode = modePicker
+	return nil
+}
+
+// startExtra begins collecting the answers one action needs.
+func (a *app) startExtra(label string) tea.Cmd {
+	for _, extra := range a.extras {
+		if extra.Label != label {
+			continue
+		}
+		a.pendingExtra = pendingExtra{extra: extra}
+		return a.nextExtraStep()
+	}
+	a.mode = modeTable
+	return nil
+}
+
+// answerExtra records one answer and moves on.
+func (a *app) answerExtra(value string) tea.Cmd {
+	a.pendingExtra.args = append(a.pendingExtra.args, value)
+	return a.nextExtraStep()
+}
+
+// nextExtraStep opens the dialog for the next unanswered step, or builds the
+// change once every step has an answer.
+func (a *app) nextExtraStep() tea.Cmd {
+	extra := a.pendingExtra.extra
+	index := len(a.pendingExtra.args)
+	if index >= len(extra.Steps) {
+		return a.confirmExtra()
+	}
+
+	step := extra.Steps[index]
+	if len(step.Options) == 0 {
+		a.input = ui.NewInput(step.Prompt, step.Placeholder, step.Current)
+		a.mode = modePrompt
+		return nil
+	}
+	a.picker = ui.NewPicker(step.Prompt, step.Options, step.Current)
+	a.pickerFor = pickerExtraStep
+	a.mode = modePicker
+	return nil
+}
+
+// confirmExtra builds the collected action and opens the confirm dialog.
+func (a *app) confirmExtra() tea.Cmd {
+	extra := a.pendingExtra.extra
+	args := a.pendingExtra.args
+	a.pendingExtra = pendingExtra{}
+	a.mode = modeTable
+
+	change, err := a.backend.BuildExtra(a.group, extra.ID, args)
+	if err != nil {
+		a.setStatus(ui.StatusError, err.Error())
+		return nil
+	}
+	if extra.Danger {
+		change.Destructive = true
+	}
+	body := change.Description + "."
+	if extra.Warning != "" {
+		body += "\n" + extra.Warning
+	}
+	a.openConfirm(extra.Label, body, change)
 	return nil
 }
 

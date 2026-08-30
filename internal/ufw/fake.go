@@ -90,9 +90,9 @@ func (f *Fake) Describe() string { return "demo (no changes are applied)" }
 // Capabilities mirrors the real ufw backend.
 func (f *Fake) Capabilities() firewall.Capabilities { return capabilities }
 
-// Preview renders the command as the real backend would, without a privilege
+// Preview renders the change as the real backend would, without a privilege
 // prefix: the demo never escalates.
-func (f *Fake) Preview(cmd firewall.Command) string { return cmd.String() }
+func (f *Fake) Preview(change firewall.Change) string { return change.String() }
 
 // Load returns a copy of the in-memory state.
 func (f *Fake) Load(_ context.Context) (firewall.Model, error) {
@@ -116,8 +116,23 @@ func (f *Fake) snapshot() firewall.Model {
 // rules returns a pointer to the single demo rule group.
 func (f *Fake) rules() *[]firewall.Rule { return &f.model.Groups[0].Rules }
 
-// Run applies a command to the in-memory state.
-func (f *Fake) Run(_ context.Context, cmd firewall.Command) (string, error) {
+// Run applies a change to the in-memory state, one command at a time.
+func (f *Fake) Run(_ context.Context, change firewall.Change) (string, error) {
+	var outputs []string
+	for _, cmd := range change.Commands {
+		out, err := f.runOne(cmd)
+		if out != "" {
+			outputs = append(outputs, out)
+		}
+		if err != nil {
+			return strings.Join(outputs, "\n"), err
+		}
+	}
+	return strings.Join(outputs, "\n"), nil
+}
+
+// runOne applies a single command.
+func (f *Fake) runOne(cmd firewall.Command) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -295,30 +310,38 @@ func (f *Fake) renumber() {
 }
 
 // BuildAddRule creates a rule.
-func (f *Fake) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Command, error) {
+func (f *Fake) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Change, error) {
 	return BuildAddRule(group, spec)
 }
 
 // BuildDeleteRule removes a rule.
-func (f *Fake) BuildDeleteRule(group string, r firewall.Rule) (firewall.Command, error) {
+func (f *Fake) BuildDeleteRule(group string, r firewall.Rule) (firewall.Change, error) {
 	return BuildDeleteRule(group, r)
 }
 
 // BuildSetEnabled turns the firewall on or off.
-func (f *Fake) BuildSetEnabled(enabled bool) (firewall.Command, error) {
+func (f *Fake) BuildSetEnabled(enabled bool) (firewall.Change, error) {
 	return BuildSetEnabled(enabled)
 }
 
 // BuildReload re-applies the rule set.
-func (f *Fake) BuildReload() (firewall.Command, error) { return BuildReload() }
+func (f *Fake) BuildReload() (firewall.Change, error) { return BuildReload() }
 
 // BuildSetPolicy changes one default policy.
 func (f *Fake) BuildSetPolicy(group string, slot firewall.PolicyDirection,
-	policy firewall.Policy) (firewall.Command, error) {
+	policy firewall.Policy) (firewall.Change, error) {
 	return BuildSetPolicy(group, slot, policy)
 }
 
 // BuildSetLogging changes the logging level.
-func (f *Fake) BuildSetLogging(level string) (firewall.Command, error) {
+func (f *Fake) BuildSetLogging(level string) (firewall.Change, error) {
 	return BuildSetLogging(level)
+}
+
+// Extras reports that ufw has no actions beyond the common set.
+func (f *Fake) Extras(_ firewall.Model, _ string) []firewall.Extra { return nil }
+
+// BuildExtra always fails: ufw offers no extra actions.
+func (f *Fake) BuildExtra(_, id string, _ []string) (firewall.Change, error) {
+	return firewall.Change{}, fmt.Errorf("ufw: no extra action %q", id)
 }

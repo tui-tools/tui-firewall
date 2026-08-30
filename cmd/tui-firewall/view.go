@@ -29,7 +29,7 @@ func (a *app) View() string {
 	switch a.mode {
 	case modeConfirm:
 		return a.confirm.View(a.theme, a.width, a.height)
-	case modeFilter:
+	case modeFilter, modePrompt:
 		return a.input.View(a.theme, a.width, a.height)
 	case modePicker:
 		return a.picker.View(a.theme, a.width, a.height)
@@ -68,8 +68,16 @@ func (a *app) tableView() string {
 		body = a.rulesTable()
 	}
 
-	help := ui.HelpBar(a.theme, shortHelpKeys(), a.width)
-	status := ui.StatusLine(a.theme, a.statusKind, a.status, a.defaultStatus(), a.width)
+	help := ui.HelpBar(a.theme, a.shortHelpKeys(), a.width)
+	// A backend-supplied warning — firewalld's panic mode — outranks whatever
+	// the last action had to say: it describes the machine, not the action.
+	kind, message := a.statusKind, a.status
+	if a.model.Warning != "" && kind != ui.StatusError {
+		// While every packet is being dropped, that is the most important
+		// thing on the screen; only an error the user just caused outranks it.
+		kind, message = ui.StatusWarn, a.model.Warning
+	}
+	status := ui.StatusLine(a.theme, kind, message, a.defaultStatus(), a.width)
 	return strings.Join([]string{header, body, help, status}, "\n")
 }
 
@@ -90,7 +98,7 @@ func (a *app) headerView() string {
 	if logging == "" {
 		logging = "unknown"
 	}
-	facts = append(facts, ui.Fact{Label: "logging", Value: logging})
+	facts = append(facts, ui.Fact{Label: a.loggingFactLabel(), Value: logging})
 	// The backend version, when it was probed: quiet on a tested version,
 	// coloured on one nobody has run against.
 	if a.backendCompat.Backend != "" {
@@ -103,7 +111,8 @@ func (a *app) headerView() string {
 	if len(a.model.Groups) > 1 {
 		group, _ := a.model.Group(a.group)
 		subtitle += "  ·  " + a.caps.GroupLabel + ": " + group.Label() +
-			" (" + strconv.Itoa(len(a.model.Groups)) + " total, [ ] to switch)"
+			"  ·  " + strconv.Itoa(len(a.model.Groups)) + " " +
+			strings.ToLower(a.caps.GroupLabel) + "s, [ ] switches"
 	}
 	if a.filter != "" {
 		subtitle += "  ·  filter: " + a.filter
@@ -111,6 +120,15 @@ func (a *app) headerView() string {
 
 	return ui.Header{Title: "tui-firewall", Subtitle: subtitle, Facts: facts}.
 		Render(t, a.width)
+}
+
+// loggingFactLabel names the logging fact the way the backend does, in the
+// short form the header has room for.
+func (a *app) loggingFactLabel() string {
+	if a.caps.LoggingLabel == "" {
+		return "logging"
+	}
+	return strings.ToLower(a.caps.LoggingLabel)
 }
 
 // policyFacts renders the default policies a group exposes.
@@ -144,18 +162,34 @@ func (a *app) defaultStatus() string {
 
 // rulesTable renders the rule list, dropping columns on narrow terminals.
 func (a *app) rulesTable() string {
+	// A backend whose group holds one species of rule (ufw) leaves Kind empty
+	// and gets no kind column; one that mixes them (firewalld) gets one. Same
+	// for the note a backend attaches to a rule.
+	showKind := anyRule(a.visible, func(r firewall.Rule) bool { return r.Kind != "" })
+	showNote := anyRule(a.visible, func(r firewall.Rule) bool { return r.Note != "" })
+
 	columns := []ui.Column{
 		{Title: "#", Width: 3},
 		{Title: "ACTION", Width: 6},
-		{Title: "DIR", Width: 3},
-		{Title: "TO", Width: 18, Flex: true},
-		{Title: "FROM", Width: 16, Flex: true},
 	}
+	if showKind {
+		// Wide enough for "forward-port", the longest kind there is.
+		columns = append(columns, ui.Column{Title: "KIND", Width: 12})
+	} else {
+		columns = append(columns, ui.Column{Title: "DIR", Width: 3})
+	}
+	columns = append(columns,
+		ui.Column{Title: "TO", Width: 18, Flex: true},
+		ui.Column{Title: "FROM", Width: 16, Flex: true})
+
 	// Progressive disclosure: extra columns only when they fit.
 	showFamily := a.width >= 70
-	showComment := a.width >= 90
+	showComment := a.width >= 90 && !showNote
 	if showFamily {
 		columns = append(columns, ui.Column{Title: "IP", Width: 3})
+	}
+	if showNote {
+		columns = append(columns, ui.Column{Title: "WHERE", Width: 14})
 	}
 	if showComment {
 		columns = append(columns, ui.Column{Title: "COMMENT", Width: 20, Flex: true})
@@ -164,15 +198,22 @@ func (a *app) rulesTable() string {
 	rows := make([][]string, 0, len(a.visible))
 	styles := make([]*lipgloss.Style, 0, len(a.visible))
 	for _, rule := range a.visible {
+		second := string(rule.Direction)
+		if showKind {
+			second = rule.Kind
+		}
 		row := []string{
 			ruleNumber(rule),
 			string(rule.Action),
-			string(rule.Direction),
+			second,
 			rule.To,
 			rule.From,
 		}
 		if showFamily {
 			row = append(row, familyLabel(rule.Family))
+		}
+		if showNote {
+			row = append(row, rule.Note)
 		}
 		if showComment {
 			row = append(row, rule.Comment)
@@ -189,6 +230,17 @@ func (a *app) rulesTable() string {
 		Offset:   a.offset,
 		Height:   a.tableHeight(),
 	}.Render(a.theme, a.width)
+}
+
+// anyRule reports whether any rule satisfies a predicate. It is what decides
+// whether an optional column is worth its width.
+func anyRule(rules []firewall.Rule, match func(firewall.Rule) bool) bool {
+	for _, rule := range rules {
+		if match(rule) {
+			return true
+		}
+	}
+	return false
 }
 
 // ruleNumber renders the rule position, or a dash when the backend has none.
@@ -240,19 +292,28 @@ func describeRule(r firewall.Rule) string {
 	return strings.Join(parts, " ")
 }
 
-// shortHelpKeys is the single-line hint bar.
-func shortHelpKeys() []ui.KeyHint {
-	return []ui.KeyHint{
+// shortHelpKeys is the single-line hint bar. It is built from what the
+// backend can do, so a key that would only answer "not supported here" is not
+// advertised in the first place.
+func (a *app) shortHelpKeys() []ui.KeyHint {
+	hints := []ui.KeyHint{
 		{Key: "a", Desc: "add"},
 		{Key: "d", Desc: "delete"},
-		{Key: "e", Desc: "enable/disable"},
-		{Key: "r", Desc: "reload"},
-		{Key: "p", Desc: "policies"},
-		{Key: "L", Desc: "logging"},
-		{Key: "/", Desc: "filter"},
-		{Key: "?", Desc: "help"},
-		{Key: "q", Desc: "quit"},
 	}
+	if a.caps.SupportsEnable {
+		hints = append(hints, ui.KeyHint{Key: "e", Desc: "enable/disable"})
+	}
+	hints = append(hints,
+		ui.KeyHint{Key: "r", Desc: "reload"},
+		ui.KeyHint{Key: "p", Desc: "policies"},
+		ui.KeyHint{Key: "L", Desc: strings.ToLower(a.loggingLabel())})
+	if len(a.backend.Extras(a.model, a.group)) > 0 {
+		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
+	}
+	return append(hints,
+		ui.KeyHint{Key: "/", Desc: "filter"},
+		ui.KeyHint{Key: "?", Desc: "help"},
+		ui.KeyHint{Key: "q", Desc: "quit"})
 }
 
 // helpKeys is the full key list shown on the help screen.
@@ -264,10 +325,11 @@ func helpKeys() []ui.KeyHint {
 		{Key: "/", Desc: "filter the rules (esc clears)"},
 		{Key: "a", Desc: "add a rule"},
 		{Key: "d", Desc: "delete the selected rule"},
-		{Key: "e", Desc: "enable or disable the firewall"},
+		{Key: "e", Desc: "enable or disable the firewall (ufw)"},
 		{Key: "r", Desc: "reload the firewall"},
-		{Key: "p", Desc: "change a default policy"},
-		{Key: "L", Desc: "change the logging level"},
+		{Key: "p", Desc: "change a default policy or a zone target"},
+		{Key: "L", Desc: "change the logging level or log-denied value"},
+		{Key: "x", Desc: "actions this backend offers beyond these keys"},
 		{Key: "[ / ]", Desc: "previous / next group (multi-group backends)"},
 		{Key: "R", Desc: "reload the view from the firewall"},
 		{Key: "?", Desc: "this help"},
