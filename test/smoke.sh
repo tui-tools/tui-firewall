@@ -78,6 +78,10 @@ elif command -v ufw >/dev/null; then
   backend=ufw
 elif command -v firewall-cmd >/dev/null; then
   backend=firewalld
+elif command -v nft >/dev/null || [[ -x /usr/sbin/nft ]]; then
+  # Nothing manages this machine and nft is here: the case the nftables
+  # backend exists for, and the shape the router guest is in.
+  backend=nftables
 else
   echo "FAIL  no supported firewall backend on this machine"
   exit 1
@@ -218,9 +222,64 @@ case "$backend" in
       "sudo -n $bin --check | tr -d ' \\n'" \
       '"name":"ufw"'
     ;;
+
+  nftables)
+    # 1. Auto-detection lands on nftables, and the read path works. It only
+    #    can if nothing else claims the ruleset, which the detail says.
+    check "check reads the nftables backend" \
+      "sudo -n $bin --check" \
+      '"backend": "nftables"'
+    check "and says why it chose it" \
+      "sudo -n $bin --check" \
+      '"selection": ".*nothing in the ruleset is managed'
+
+    # 2. The version in the nftables block is the one that printed the JSON
+    #    being parsed, not whatever `nft --version` on the PATH would say.
+    nft_version=$(nft --version | sed -n 's/^nftables v\([0-9][0-9.]*\).*/\1/p')
+    check "the ruleset reports nft $nft_version" \
+      "sudo -n $bin --check" \
+      "\"nftVersion\": \"$nft_version\""
+    check "and the schema it was written against" \
+      "sudo -n $bin --check" \
+      '"schemaVersion": 1'
+
+    # 3. The base chain count matches nft's own. This is the real parser
+    #    test: a tool that fetched the JSON but failed to parse it reports
+    #    zero, and a tool that mis-read a hook reports the wrong number.
+    nft_base=$(sudo -n nft list ruleset | grep -c 'type .* hook ' || true)
+    check "base chain count matches \`nft list ruleset\` ($nft_base)" \
+      "sudo -n $bin --check" \
+      "\"baseChains\": $nft_base"
+
+    # 4. The set count matches too, because the alias view is built from it.
+    nft_sets=$(sudo -n nft list ruleset | grep -cE '^[[:space:]]+set [^ ]+ \{' || true)
+    check "alias count matches the ruleset ($nft_sets)" \
+      "sudo -n $bin --check" \
+      "\"sets\": $nft_sets"
+
+    # 5. Whether the table this tool owns is there is a fact about the
+    #    machine, and the report has to state it either way.
+    check "the report says whether the tool's own table exists" \
+      "sudo -n $bin --check" \
+      '"ownTablePresent": (true|false)'
+
+    # 6. The NAT and alias views are always offered, even on a ruleset that
+    #    translates nothing: an empty view is an answer.
+    check "the NAT view is offered" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"Name":"NAT"'
+    check "the alias view is offered" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"Name":"Aliases"'
+
+    # 7. The detector describes the backends it did not choose.
+    check "the report names every backend it knows" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"name":"firewalld"'
+    ;;
 esac
 
-# Both backends declare a version in the manifest, so whichever one this
+# All three backends declare a version in the manifest, so whichever one this
 # machine runs, the probed version is what gets recorded.
 if [[ $fail -eq 0 ]]; then
   record_compat "$(sudo -n "$bin" --check 2>/dev/null)" pass

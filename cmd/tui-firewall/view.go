@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -62,10 +63,9 @@ func (a *app) tableView() string {
 		body = ui.EmptyState(a.theme, "could not read the firewall — see the message below",
 			a.width, a.tableHeight()+1)
 	case len(a.visible) == 0:
-		body = ui.EmptyState(a.theme, "no rules yet — press a to add one",
-			a.width, a.tableHeight()+1)
+		body = ui.EmptyState(a.theme, a.emptyMessage(), a.width, a.tableHeight()+1)
 	default:
-		body = a.rulesTable()
+		body = a.groupTable()
 	}
 
 	help := ui.HelpBar(a.theme, a.shortHelpKeys(), a.width)
@@ -81,6 +81,20 @@ func (a *app) tableView() string {
 	return strings.Join([]string{header, body, help, status}, "\n")
 }
 
+// emptyMessage says what an empty view means and which key fills it, which
+// differs by view: a rule is added with a, and an alias or a port forward
+// comes from the actions menu.
+func (a *app) emptyMessage() string {
+	switch a.currentView() {
+	case firewall.ViewNAT:
+		return "nothing is translated here — press x for masquerading and port forwards"
+	case firewall.ViewAliases:
+		return "no aliases yet — press x to create one"
+	default:
+		return "no rules yet — press a to add one"
+	}
+}
+
 // headerView renders the status facts at the top of the screen.
 func (a *app) headerView() string {
 	t := a.theme
@@ -94,15 +108,26 @@ func (a *app) headerView() string {
 	if group, ok := a.model.Group(a.group); ok {
 		facts = append(facts, policyFacts(group)...)
 	}
-	logging := a.model.Logging
-	if logging == "" {
-		logging = "unknown"
+	// A backend with no logging concept gets no logging fact: "logging:
+	// unknown" reads as a machine whose state could not be read, and on
+	// nftables it only means the question does not apply.
+	if a.caps.SupportsLogging {
+		logging := a.model.Logging
+		if logging == "" {
+			logging = "unknown"
+		}
+		facts = append(facts, ui.Fact{Label: a.loggingFactLabel(), Value: logging})
 	}
-	facts = append(facts, ui.Fact{Label: a.loggingFactLabel(), Value: logging})
 	// The backend version, when it was probed: quiet on a tested version,
 	// coloured on one nobody has run against.
 	if a.backendCompat.Backend != "" {
 		facts = append(facts, ui.CompatFact(t, a.backendCompat))
+	}
+	// Staging is a mode the operator has to be able to see they are in: a change
+	// that was staged rather than applied, and a batch that is waiting to be
+	// kept, are both facts about the machine's near future.
+	if fact, ok := a.stagingFact(); ok {
+		facts = append(facts, fact)
 	}
 
 	// The group selector only makes sense when the backend has more than one
@@ -112,7 +137,7 @@ func (a *app) headerView() string {
 		group, _ := a.model.Group(a.group)
 		subtitle += "  ·  " + a.caps.GroupLabel + ": " + group.Label() +
 			"  ·  " + strconv.Itoa(len(a.model.Groups)) + " " +
-			strings.ToLower(a.caps.GroupLabel) + "s, [ ] switches"
+			strings.ToLower(a.caps.GroupLabel) + "s, [ ] or v switches"
 	}
 	if a.filter != "" {
 		subtitle += "  ·  filter: " + a.filter
@@ -120,6 +145,27 @@ func (a *app) headerView() string {
 
 	return ui.Header{Title: "tui-firewall", Subtitle: subtitle, Facts: facts}.
 		Render(t, a.width)
+}
+
+// stagingFact renders the header fact for staging: whether it is on, how many
+// changes are pending, and whether an applied batch is waiting to be kept.
+func (a *app) stagingFact() (ui.Fact, bool) {
+	if a.staging == nil {
+		return ui.Fact{}, false
+	}
+	switch {
+	case a.awaitingKeep:
+		style := a.theme.Warn
+		return ui.Fact{Label: "staging", Value: "awaiting keep (k)", Style: &style}, true
+	case a.stagingOn:
+		style := a.theme.Warn
+		return ui.Fact{Label: "staging",
+			Value: fmt.Sprintf("on, %d pending", a.staging.Len()), Style: &style}, true
+	case a.staging.Len() > 0:
+		return ui.Fact{Label: "staging",
+			Value: fmt.Sprintf("%d pending", a.staging.Len())}, true
+	}
+	return ui.Fact{}, false
 }
 
 // loggingFactLabel names the logging fact the way the backend does, in the
@@ -149,19 +195,46 @@ func policyFacts(g firewall.Group) []ui.Fact {
 
 // defaultStatus is the hint shown when there is no message to report.
 func (a *app) defaultStatus() string {
-	count := strconv.Itoa(len(a.visible))
 	if a.filter != "" {
 		total := 0
 		if group, ok := a.model.Group(a.group); ok {
 			total = len(group.Rules)
 		}
-		return count + " of " + strconv.Itoa(total) + " rules  ·  ? for help"
+		return strconv.Itoa(len(a.visible)) + " of " +
+			viewCountLabel(a.currentView(), total) + "  ·  ? for help"
 	}
-	return count + " rules  ·  ? for help"
+	return viewCountLabel(a.currentView(), len(a.visible)) + "  ·  ? for help"
+}
+
+// groupTable renders whichever table the current group asks for. A backend
+// whose groups all hold the same species of entry never leaves the first
+// branch; the nftables backend shows filter rules, address translation and
+// named sets, and no one set of columns is honest about all three.
+func (a *app) groupTable() string {
+	switch a.currentView() {
+	case firewall.ViewNAT:
+		return a.natTable()
+	case firewall.ViewAliases:
+		return a.aliasTable()
+	default:
+		return a.rulesTable()
+	}
+}
+
+// currentView names the layout the group on screen wants.
+func (a *app) currentView() string {
+	group, ok := a.model.Group(a.group)
+	if !ok {
+		return firewall.ViewRules
+	}
+	return group.View
 }
 
 // rulesTable renders the rule list, dropping columns on narrow terminals.
 func (a *app) rulesTable() string {
+	if a.flowColumns() {
+		return a.flowRuleTable()
+	}
 	// A backend whose group holds one species of rule (ufw) leaves Kind empty
 	// and gets no kind column; one that mixes them (firewalld) gets one. Same
 	// for the note a backend attaches to a rule.
@@ -303,12 +376,31 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 	if a.caps.SupportsEnable {
 		hints = append(hints, ui.KeyHint{Key: "e", Desc: "enable/disable"})
 	}
-	hints = append(hints,
-		ui.KeyHint{Key: "r", Desc: "reload"},
-		ui.KeyHint{Key: "p", Desc: "policies"},
-		ui.KeyHint{Key: "L", Desc: strings.ToLower(a.loggingLabel())})
+	if len(a.model.Groups) > 1 {
+		hints = append(hints, ui.KeyHint{Key: "v", Desc: "view"})
+	}
+	if a.caps.SupportsReload {
+		hints = append(hints, ui.KeyHint{Key: "r", Desc: "reload"})
+	}
+	hints = append(hints, ui.KeyHint{Key: "p", Desc: "policies"})
+	if a.caps.SupportsLogging {
+		hints = append(hints,
+			ui.KeyHint{Key: "L", Desc: strings.ToLower(a.loggingLabel())})
+	}
 	if len(a.backend.Extras(a.model, a.group)) > 0 {
 		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
+	}
+	if a.awaitingKeep {
+		hints = append(hints, ui.KeyHint{Key: "k", Desc: "keep"})
+	} else if a.staging != nil {
+		desc := "stage"
+		if a.stagingOn {
+			desc = "staging on"
+		}
+		hints = append(hints, ui.KeyHint{Key: "s", Desc: desc})
+		if a.staging.Len() > 0 {
+			hints = append(hints, ui.KeyHint{Key: "S", Desc: "apply"})
+		}
 	}
 	return append(hints,
 		ui.KeyHint{Key: "/", Desc: "filter"},
@@ -331,7 +423,11 @@ func helpKeys() []ui.KeyHint {
 		{Key: "L", Desc: "change the logging level or log-denied value"},
 		{Key: "x", Desc: "actions this backend offers beyond these keys"},
 		{Key: "[ / ]", Desc: "previous / next group (multi-group backends)"},
+		{Key: "v", Desc: "pick a group: a firewalld zone, an nftables chain, NAT, aliases"},
 		{Key: "R", Desc: "reload the view from the firewall"},
+		{Key: "s", Desc: "toggle staging: collect changes instead of applying them (nftables)"},
+		{Key: "S", Desc: "review and apply the staged changes as one atomic transaction"},
+		{Key: "k", Desc: "keep an applied batch before its rollback timer fires"},
 		{Key: "?", Desc: "this help"},
 		{Key: "q", Desc: "quit"},
 		{Key: "", Desc: ""},

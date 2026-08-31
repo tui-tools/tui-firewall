@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"nftABles\": [{\"chain\": {\"nAme\": \"0\",\"poliCY\":\"0\"}}]} ")

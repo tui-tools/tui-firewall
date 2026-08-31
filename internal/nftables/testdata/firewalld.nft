@@ -1,0 +1,128 @@
+# The shape firewalld installs on a machine it manages: its own inet table
+# with hooked chains at priority filter + 10, a per-zone chain tree hanging
+# off them, and the sets it keeps for its zone sources.
+table inet firewalld {
+	set default/fail2ban {
+		type ipv4_addr
+		flags interval,timeout
+	}
+
+	chain mangle_PREROUTING {
+		type filter hook prerouting priority mangle + 10; policy accept;
+		jump mangle_PREROUTING_ZONES
+	}
+
+	chain mangle_PREROUTING_ZONES {
+		iifname "wlan0" goto mangle_PRE_public
+		goto mangle_PRE_public
+	}
+
+	chain mangle_PRE_public {
+		jump mangle_PRE_public_pre
+		jump mangle_PRE_public_log
+		jump mangle_PRE_public_deny
+		jump mangle_PRE_public_allow
+		jump mangle_PRE_public_post
+	}
+
+	chain mangle_PRE_public_pre {
+	}
+
+	chain mangle_PRE_public_log {
+	}
+
+	chain mangle_PRE_public_deny {
+	}
+
+	chain mangle_PRE_public_allow {
+	}
+
+	chain mangle_PRE_public_post {
+	}
+
+	chain filter_INPUT {
+		type filter hook input priority filter + 10; policy accept;
+		ct state established,related accept
+		iifname "lo" accept
+		jump filter_INPUT_ZONES
+		ct state invalid drop
+		reject with icmpx admin-prohibited
+	}
+
+	chain filter_INPUT_ZONES {
+		iifname "wlan0" goto filter_IN_public
+		goto filter_IN_public
+	}
+
+	chain filter_IN_public {
+		jump filter_IN_public_pre
+		jump filter_IN_public_log
+		jump filter_IN_public_deny
+		jump filter_IN_public_allow
+		jump filter_IN_public_post
+		meta l4proto { icmp, ipv6-icmp } accept
+	}
+
+	chain filter_IN_public_pre {
+	}
+
+	chain filter_IN_public_log {
+	}
+
+	chain filter_IN_public_deny {
+	}
+
+	chain filter_IN_public_allow {
+		tcp dport 22 ct state new,untracked accept
+		ip6 daddr fe80::/64 udp dport 546 ct state new,untracked accept
+		tcp dport 5355 ct state new,untracked accept
+	}
+
+	chain filter_IN_public_post {
+	}
+
+	chain filter_FORWARD {
+		type filter hook forward priority filter + 10; policy accept;
+		ct state established,related accept
+		iifname "lo" accept
+		jump filter_FORWARD_ZONES
+		ct state invalid drop
+		reject with icmpx admin-prohibited
+	}
+
+	chain filter_FORWARD_ZONES {
+		goto filter_FWD_public
+	}
+
+	chain filter_FWD_public {
+		jump filter_FWD_public_pre
+		jump filter_FWD_public_post
+	}
+
+	chain filter_FWD_public_pre {
+	}
+
+	chain filter_FWD_public_post {
+	}
+
+	chain filter_OUTPUT {
+		type filter hook output priority filter + 10; policy accept;
+		oifname "lo" accept
+	}
+
+	chain nat_POSTROUTING {
+		type nat hook postrouting priority srcnat + 10; policy accept;
+		jump nat_POSTROUTING_ZONES
+	}
+
+	chain nat_POSTROUTING_ZONES {
+		goto nat_POST_public
+	}
+
+	chain nat_POST_public {
+		jump nat_POST_public_post
+	}
+
+	chain nat_POST_public_post {
+	}
+}

@@ -1,0 +1,117 @@
+# The shape ufw leaves behind: it drives iptables, which on a modern machine
+# is iptables-nft, so the rules land in the legacy ip/ip6 filter tables under
+# the chain names ufw generates.
+table ip filter {
+	chain INPUT {
+		type filter hook input priority filter; policy drop;
+		counter jump ufw-before-logging-input
+		counter jump ufw-before-input
+		counter jump ufw-after-input
+		counter jump ufw-after-logging-input
+		counter jump ufw-reject-input
+		counter jump ufw-track-input
+	}
+
+	chain FORWARD {
+		type filter hook forward priority filter; policy drop;
+		counter jump ufw-before-logging-forward
+		counter jump ufw-before-forward
+		counter jump ufw-after-forward
+	}
+
+	chain OUTPUT {
+		type filter hook output priority filter; policy accept;
+		counter jump ufw-before-logging-output
+		counter jump ufw-before-output
+		counter jump ufw-after-output
+	}
+
+	chain ufw-before-input {
+		iifname "lo" counter accept
+		ct state related,established counter accept
+		ct state invalid counter jump ufw-logging-deny
+		ct state invalid counter drop
+		ip protocol icmp icmp type destination-unreachable counter accept
+		udp sport 67 udp dport 68 counter accept
+		counter jump ufw-not-local
+		counter jump ufw-user-input
+	}
+
+	chain ufw-user-input {
+		tcp dport 22 counter accept
+		tcp dport 80 counter accept
+		tcp dport 443 counter accept
+		ip saddr 10.0.0.0/8 tcp dport 5432 counter accept
+		tcp dport 3306 counter drop
+	}
+
+	chain ufw-before-forward {
+		counter jump ufw-user-forward
+	}
+
+	chain ufw-user-forward {
+	}
+
+	chain ufw-before-output {
+		oifname "lo" counter accept
+		ct state related,established counter accept
+		counter jump ufw-user-output
+	}
+
+	chain ufw-user-output {
+	}
+
+	chain ufw-after-input {
+	}
+
+	chain ufw-after-output {
+	}
+
+	chain ufw-after-forward {
+	}
+
+	chain ufw-before-logging-input {
+	}
+
+	chain ufw-before-logging-output {
+	}
+
+	chain ufw-before-logging-forward {
+	}
+
+	chain ufw-after-logging-input {
+	}
+
+	chain ufw-reject-input {
+	}
+
+	chain ufw-track-input {
+	}
+
+	chain ufw-not-local {
+	}
+
+	chain ufw-logging-deny {
+	}
+}
+table ip6 filter {
+	chain INPUT {
+		type filter hook input priority filter; policy drop;
+		counter jump ufw6-before-input
+		counter jump ufw6-after-input
+	}
+
+	chain ufw6-before-input {
+		iifname "lo" counter accept
+		ct state related,established counter accept
+		counter jump ufw6-user-input
+	}
+
+	chain ufw6-user-input {
+		tcp dport 22 counter accept
+		tcp dport 80 counter accept
+	}
+
+	chain ufw6-after-input {
+	}
+}

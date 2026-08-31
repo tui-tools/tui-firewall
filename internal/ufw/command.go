@@ -33,6 +33,7 @@ var capabilities = firewall.Capabilities{
 	SupportsComments: true,
 	SupportsRouted:   true,
 	SupportsLogging:  true,
+	SupportsReload:   true,
 	SupportsEnable:   true,
 	ServiceLabel:     "App profile",
 	GroupLabel:       "Rules",

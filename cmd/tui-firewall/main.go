@@ -14,6 +14,7 @@ import (
 	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-firewall/internal/firewalld"
+	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
 	"github.com/tui-tools/tui-kit/config"
 	"github.com/tui-tools/tui-kit/theme"
@@ -63,12 +64,13 @@ func (d *demoFlag) Set(value string) error {
 	case "", "true":
 		d.backend = backends.BackendUFW
 		return nil
-	case backends.BackendUFW, backends.BackendFirewalld:
+	case backends.BackendUFW, backends.BackendFirewalld, backends.BackendNftables:
 		d.backend = value
 		return nil
 	default:
-		return fmt.Errorf("unknown demo backend %q: use %s or %s",
-			value, backends.BackendUFW, backends.BackendFirewalld)
+		return fmt.Errorf("unknown demo backend %q: use %s, %s or %s",
+			value, backends.BackendUFW, backends.BackendFirewalld,
+			backends.BackendNftables)
 	}
 }
 
@@ -96,13 +98,15 @@ func parseFlags(args []string, out *os.File) (options, error) {
 	fs.SetOutput(out)
 	fs.Var(&opts.demo, "demo",
 		"run against sample data, without touching the system firewall; "+
-			"--demo=firewalld shows the firewalld model instead of the ufw one")
+			"--demo=firewalld and --demo=nftables show those models instead "+
+			"of the ufw one")
 	fs.BoolVar(&opts.check, "check", false,
 		"read the firewall and print the parsed model as JSON, then exit "+
 			"(no UI, no changes); exit 1 if the backend cannot be read")
 	fs.BoolVar(&opts.report, "report", false, reportUsage)
 	fs.StringVar(&opts.backend, "backend", "",
-		"firewall backend: auto, ufw or firewalld (overrides the config file)")
+		"firewall backend: auto, ufw, firewalld or nftables "+
+			"(overrides the config file)")
 	fs.StringVar(&opts.themePath, "theme", "",
 		"path to an Omarchy-style colors.toml (overrides the config file)")
 	fs.StringVar(&opts.sudo, "sudo", "",
@@ -192,13 +196,27 @@ func run(args []string) error {
 
 	if opts.check {
 		return runCheck(backend, backendCompat, backends.Inspect(backend.Name()),
-			os.Stdout)
+			selectionDetail(cfg, opts), os.Stdout)
 	}
 
 	program := tea.NewProgram(newApp(backend, theme.New(), backendCompat),
 		tea.WithAltScreen())
 	_, err = program.Run()
 	return err
+}
+
+// selectionDetail is the sentence the detector gave for the backend it chose.
+// It is re-resolved rather than threaded through, because --demo never went
+// near the detector and would otherwise have to carry an empty field around.
+func selectionDetail(cfg config.Config, opts options) string {
+	if opts.demo.on {
+		return "--demo: sample data, nothing on this machine was read"
+	}
+	selection, err := backends.Resolve(cfg)
+	if err != nil {
+		return err.Error()
+	}
+	return selection.Detail
 }
 
 // applyOverrides folds the command line into the configuration, which is the
@@ -222,10 +240,14 @@ func applyOverrides(cfg *config.Config, opts options) {
 // mapping and command builders rather than a firewalld-flavoured ufw.
 func pickBackend(cfg config.Config, opts options) (firewall.Backend, error) {
 	if opts.demo.on {
-		if opts.demo.backend == backends.BackendFirewalld {
+		switch opts.demo.backend {
+		case backends.BackendFirewalld:
 			return firewalld.NewFake(), nil
+		case backends.BackendNftables:
+			return nftables.NewFake(), nil
+		default:
+			return ufw.NewFake(), nil
 		}
-		return ufw.NewFake(), nil
 	}
 	return backends.Select(cfg)
 }

@@ -15,6 +15,20 @@ import (
 // noneOption is the "leave empty" entry of every optional choice field.
 const noneOption = "(none)"
 
+// ctStateOptions are the connection-state presets the form offers. They are
+// the combinations a stateful firewall is actually built from; the field is a
+// single pick because a rule almost never wants an arbitrary subset, and the
+// one it usually wants — established,related — leads the list.
+var ctStateOptions = []string{
+	noneOption,
+	"established,related",
+	"established,related,new",
+	"new",
+	"invalid",
+	"established",
+	"related",
+}
+
 // fieldKind tells a cycled choice from a free-text field.
 type fieldKind int
 
@@ -79,12 +93,23 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 		directions = append(directions, string(d))
 	}
 	protos := []string{noneOption, "tcp", "udp"}
+	if caps.SupportsICMP {
+		protos = append(protos, "icmp", "icmpv6")
+	}
 	serviceOptions := append([]string{noneOption}, services...)
 
 	fields := []formField{
 		{key: "action", label: "Action", kind: fieldChoice, options: actions},
-		{key: "direction", label: "Direction", kind: fieldChoice, options: directions,
-			help: "Leave empty to let the backend decide."},
+	}
+	// A backend that qualifies a rule by direction gets the field; one whose
+	// rules take their direction from where they live — an nftables chain is
+	// hooked at exactly one point — would only be offering "(none)".
+	if len(caps.Directions) > 0 {
+		fields = append(fields, formField{key: "direction", label: "Direction",
+			kind: fieldChoice, options: directions,
+			help: "Leave empty to let the backend decide."})
+	}
+	fields = append(fields, []formField{
 		{key: "service", label: caps.ServiceLabel, kind: fieldChoice,
 			options: serviceOptions, help: "Replaces port and protocol."},
 		{key: "ports", label: "Port(s)", kind: fieldText,
@@ -93,6 +118,29 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 		{key: "from", label: "From", kind: fieldText,
 			input: text("any, 10.0.0.0/8, fd00::/8")},
 		{key: "to", label: "To", kind: fieldText, input: text("any, 192.168.1.10")},
+	}...)
+	if caps.SupportsICMP {
+		fields = append(fields, formField{key: "icmptype", label: "ICMP type",
+			kind: fieldText, input: text("echo-request, echo-reply (icmp only)"),
+			help: "Only used when the protocol is icmp or icmpv6."})
+	}
+	// Interface matches are what make a router rule a router rule: "SSH from
+	// the LAN side only" is an iifname match. They exist only where the backend
+	// can express them.
+	if caps.SupportsInterfaces {
+		fields = append(fields,
+			formField{key: "iif", label: "In iface", kind: fieldText,
+				input: text("lan0, wan0 — the interface it arrives on")},
+			formField{key: "oif", label: "Out iface", kind: fieldText,
+				input: text("wan0 — the interface it leaves on")})
+	}
+	// The connection-state match is what makes a rule stateful. The presets are
+	// the combinations a router actually uses; "established,related" is the one
+	// every stateful firewall opens with.
+	if caps.SupportsConntrack {
+		fields = append(fields, formField{key: "ctstate", label: "Conn. state",
+			kind: fieldChoice, options: ctStateOptions,
+			help: "established,related is the stateful default."})
 	}
 	if caps.SupportsFamily {
 		fields = append(fields, formField{key: "family", label: "Family",
@@ -214,10 +262,16 @@ func (f ruleForm) spec() (firewall.RuleSpec, error) {
 		Proto:     f.get("proto"),
 		From:      f.get("from"),
 		To:        f.get("to"),
+		InIface:   f.get("iif"),
+		OutIface:  f.get("oif"),
+		ICMPType:  f.get("icmptype"),
 		Comment:   f.get("comment"),
 		Family:    firewall.Family(f.get("family")),
 		Log:       f.get("log") == "yes",
 		Routed:    f.get("routed") == "yes",
+	}
+	if states := f.get("ctstate"); states != "" {
+		spec.CTStates = strings.Split(states, ",")
 	}
 	if position := f.get("position"); position != "" {
 		n, err := strconv.Atoi(position)
