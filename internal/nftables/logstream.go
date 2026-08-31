@@ -254,9 +254,54 @@ func (s *LogStream) pumpReader(ctx context.Context, reader io.ReadCloser, wait f
 	}
 }
 
+// kernelLogArgs is the journalctl invocation the live view follows: the kernel
+// log, from the tail forward, in the timestamp format the parser reads. The
+// kernel-only filter is journalctl's -k, whose long form is --dmesg. There is
+// no --kernel option; passing one makes journalctl exit at once, before a line
+// is read, which the unit tests miss because they drive the Fake stream — so
+// this stays one place a test can pin.
+func kernelLogArgs() []string {
+	// --lines=0 starts at the tail: the view shows packets logged from now on,
+	// not a replay of the journal. short-iso is the timestamp the parser reads.
+	return []string{
+		"--dmesg", "--follow", "--lines=0", "--output=short-iso", "--no-pager",
+	}
+}
+
+// cappedBuffer collects a process's stderr up to a fixed size and drops the
+// rest, so a failing command's first diagnostic line survives without a
+// misbehaving one growing the buffer without bound. It always reports a full
+// write, so the process never blocks on a full stderr pipe.
+type cappedBuffer struct {
+	buf   []byte
+	limit int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.limit - len(c.buf); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		c.buf = append(c.buf, p[:room]...)
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return string(c.buf) }
+
+// firstStderrLine is the reason to show the operator: a process's first
+// non-empty stderr line, trimmed.
+func firstStderrLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
 // LogStream opens the live kernel-log feed, filtered to this tool's own log
 // prefix. It reads journald — where the kernel `log` statement's output lands —
-// with `journalctl --kernel --follow`, escalating the same way the nft reads do
+// with `journalctl --dmesg --follow`, escalating the same way the nft reads do
 // because the kernel log needs privilege. A machine without journald is told so
 // plainly rather than left with an empty screen.
 func (r *Real) LogStream(ctx context.Context) (*LogStream, error) {
@@ -268,11 +313,7 @@ func (r *Real) LogStream(ctx context.Context) (*LogStream, error) {
 				"writes to the kernel log, which journald carries — install " +
 				"systemd's journal, or read /dev/kmsg by hand")
 	}
-	// --lines=0 starts at the tail: the view shows packets logged from now on,
-	// not a replay of the journal. short-iso is the timestamp the parser reads.
-	journalArgs := []string{
-		"--kernel", "--follow", "--lines=0", "--output=short-iso", "--no-pager",
-	}
+	journalArgs := kernelLogArgs()
 
 	bin := path
 	args := journalArgs
@@ -297,16 +338,30 @@ func (r *Real) LogStream(ctx context.Context) (*LogStream, error) {
 		cancel()
 		return nil, errorf("could not read journalctl's output: %v", err)
 	}
-	cmd.Stderr = io.Discard
+	// Keep journalctl's own diagnostics. When it exits at once — an option it
+	// does not know, a journal it cannot read — its first stderr line is the
+	// reason, and discarding it would leave the view saying only "exit status
+	// 1". Capped so a process that streams to stderr cannot grow it unbounded.
+	errbuf := &cappedBuffer{limit: 4096}
+	cmd.Stderr = errbuf
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, errorf("could not start journalctl: %v", err)
 	}
 
-	stream := newLogStream("journald kernel log · journalctl --kernel --follow · " +
+	stream := newLogStream("journald kernel log · journalctl --dmesg --follow · " +
 		LogPrefixMarker + " prefix")
 	stream.cancel = cancel
-	go stream.pumpReader(streamCtx, stdout, cmd.Wait)
+	wait := func() error {
+		werr := cmd.Wait()
+		if werr != nil {
+			if line := firstStderrLine(errbuf.String()); line != "" {
+				return errorf("%s (%v)", line, werr)
+			}
+		}
+		return werr
+	}
+	go stream.pumpReader(streamCtx, stdout, wait)
 	return stream, nil
 }
 
@@ -337,7 +392,7 @@ func (r Ruleset) LoggedRules() (owned, total int) {
 // a stream: opening the follow would need root, which a report path may not
 // have, so presence on PATH is what it answers.
 func LogSourceProbe() (readable bool, source, detail string) {
-	source = "journald kernel log (journalctl --kernel)"
+	source = "journald kernel log (journalctl --dmesg)"
 	if _, err := exec.LookPath("journalctl"); err != nil {
 		return false, source, "journalctl not found on PATH: the live view " +
 			"needs journald, which carries the kernel log the `log` statement writes"
