@@ -40,6 +40,30 @@
       "caption": "The firewalld actions menu: default zone, interfaces, masquerading, panic mode"
     },
     {
+      "path": "docs/screenshots/tui-firewall-nftables.png",
+      "caption": "The nftables input chain read straight from nft, with interfaces, connection state and per-rule counters"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-nftables-nat.png",
+      "caption": "The NAT view: masquerade, SNAT and DNAT port forwards, each read as what it translates to"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-nftables-aliases.png",
+      "caption": "Named sets as aliases, with what each holds and how many rules use it"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-nftables-add.png",
+      "caption": "The add-rule form on nftables: connection state and inbound/outbound interface matches"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-nftables-staging.png",
+      "caption": "Staged changes collected for one atomic apply, reviewed before anything runs"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-nftables-apply.png",
+      "caption": "The atomic apply preview: the whole nft transaction, with a connectivity-safe rollback window"
+    },
+    {
       "path": "docs/screenshots/tui-firewall-help.png",
       "caption": "The help screen, generated from the same action table as the key map"
     }

@@ -62,8 +62,10 @@ tidy:
 	$(GO) mod tidy
 
 ## screenshots: re-render the README frames from --demo (needs chrome/chromium).
-## Both backends are covered: the ufw demo for the shared screens, the
-## firewalld one for the zone view and the actions menu that only it has.
+## Every backend is covered: the ufw demo for the shared screens, the firewalld
+## one for the zone view and the actions menu that only it has, and the
+## nftables one for the router screens — the flow rule list, the NAT and alias
+## views, the phase-2 add form and the staged atomic apply.
 screenshots: build
 	python3 $(KIT)/tools/render-screenshots.py \
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
@@ -73,6 +75,13 @@ screenshots: build
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
 		--args="--demo=firewalld" \
 		--screen firewalld= --screen firewalld-actions=x
+	python3 $(KIT)/tools/render-screenshots.py \
+		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
+		--args="--demo=nftables" \
+		--screen nftables= --screen nftables-add=a \
+		--screen 'nftables-nat=[[' --screen 'nftables-aliases=[' \
+		--screen nftables-staging=sdjdS \
+		--screen 'nftables-apply=sdjdS\r'
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

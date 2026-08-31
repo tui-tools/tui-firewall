@@ -7,16 +7,18 @@
 > and keys may move without notice until 1.0. Pin versions, and report what
 > breaks.
 
-A terminal UI for the Linux firewall — **ufw** and **firewalld** — that shows
-the rules you actually have and **previews the exact command line of every
-change before running it**.
+A terminal UI for the Linux firewall — **ufw**, **firewalld** and **nftables** —
+that shows the rules you actually have and **previews the exact command line of
+every change before running it**.
 
-Neither firewall has a TUI: you get the CLI, or a desktop GUI. `tui-firewall`
+None of them has a TUI: you get the CLI, or a desktop GUI. `tui-firewall`
 fills the gap on a server or a tiling desktop, in the
 [Omarchy](https://omarchy.org) visual style. It picks the backend your machine
 actually runs, and the screen is built from what that backend can do — one rule
 list and three default policies for ufw, one group per zone with its target for
-firewalld.
+firewalld, and for a machine neither of them manages, the raw nftables ruleset
+read straight from `nft`: filter chains by hook, a NAT view, and named sets as
+aliases.
 
 ![Rules table](docs/screenshots/tui-firewall-main.png)
 
@@ -185,13 +187,16 @@ you quit.
 ```sh
 tui-firewall --demo             # an in-memory ufw
 tui-firewall --demo=firewalld   # an in-memory firewalld
+tui-firewall --demo=nftables    # a sample router ruleset
 ```
 
 `--demo` runs against an in-memory sample firewall. Every key works, every
 command is built and previewed for real, and nothing touches your system. The
-two demos are the two real backends over fake output, not two skins: the
-firewalld one parses firewalld-shaped text with the same parser and builds its
-commands with the same builder.
+three demos are the three real backends over fake output, not three skins: each
+one parses backend-shaped output with the same parser and builds its commands
+with the same builder. The nftables demo starts from a router ruleset — filter
+chains for input, forward and output, the two NAT chains, and the named sets the
+rules use as aliases.
 
 ## Every change is previewed
 
@@ -207,10 +212,12 @@ is what executes.
 tui-firewall                      # drive the real firewall
 tui-firewall --demo               # sample ufw data, no privileges needed
 tui-firewall --demo=firewalld     # sample firewalld data
+tui-firewall --demo=nftables      # sample router ruleset
 tui-firewall --check              # read the firewall, print JSON, exit
 tui-firewall --report             # print what a bug report needs, exit
 tui-firewall --backend ufw        # skip autodetection
 tui-firewall --backend firewalld
+tui-firewall --backend nftables
 tui-firewall --theme ~/mytheme/colors.toml
 tui-firewall --sudo ""            # run the firewall command directly (as root)
 tui-firewall --version
@@ -380,9 +387,84 @@ collects the answers and previews whatever comes back. That is the same reason
 `e` is absent on firewalld — starting and stopping a system service is
 `systemctl`'s job, and the tool says so instead of doing it quietly.
 
+## nftables
+
+![The nftables rule list](docs/screenshots/tui-firewall-nftables.png)
+
+On a machine that runs neither ufw nor firewalld, `tui-firewall` reads `nft -j
+list ruleset` and drives `nft` itself. It is the third backend, picked
+automatically when the other two are absent, and the screen is built from the
+ruleset it finds rather than from a fixed layout.
+
+Because nftables is not a policy manager but the packet path itself, the rule
+list reads the way a router's rule list reads: the verdict, the **interfaces**
+the packet passes between (`iifname` / `oifname`), the **connection state** it
+matches (`ct state established,related`), the protocol and port, and the
+**counter** that says whether the rule has ever fired. A chain has a view of its
+own, one group per hooked chain, stepped through with `[` and `]` or picked from
+`v`; base chains show their **policy** even when they hold no rules, because the
+policy is a fact worth seeing.
+
+Two chain types get a view shaped for the question they answer:
+
+- **NAT.** Address translation is read as *what does this become*, not *what is
+  allowed*, so the masquerade, SNAT and DNAT rules of the `nat` chains are shown
+  in their own view with the translated target as the column the eye lands on.
+
+  ![The NAT view](docs/screenshots/tui-firewall-nftables-nat.png)
+
+- **Aliases.** A named set is an alias a rule refers to by name. Each is listed
+  with what it holds, its members, and how many rules use it — a set nothing
+  refers to is dimmed as dead weight, and one four rules refer to is four rules
+  you change by editing it.
+
+  ![Named sets as aliases](docs/screenshots/tui-firewall-nftables-aliases.png)
+
+The add-rule form carries the matches a router rule needs that ufw and firewalld
+never expose: inbound and outbound interface, connection state, ICMP type,
+address family, and an alias as the source.
+
+![The add-rule form on nftables](docs/screenshots/tui-firewall-nftables-add.png)
+
+### What it writes, and where it will not
+
+nftables has no permanent/runtime split and no manager to answer to, so a write
+is a change to the live ruleset. That makes it easy to lock yourself out, and
+`tui-firewall` is deliberately narrow about where it writes: only to a **base
+chain whose policy nft reported**, or to **its own table**. A chain that some
+other manager owns is shown but marked read-only, and the tool says why in the
+chain's own description rather than letting you find out at the confirm dialog.
+Every rule is deleted by its **handle**, which `nft -j` carries in the ruleset,
+because a rule's position shifts the moment anything is inserted above it.
+
+### Staged atomic apply, with a connectivity-safe rollback
+
+Changing many rules on a router one command at a time is how a remote session
+dies halfway through, with the box in a state that is neither the old ruleset nor
+the new one. nftables can do better, and this backend uses it: press `s` to turn
+**staging** on, and every change is collected instead of applied. `S` reviews
+the pending set.
+
+![The staged changes](docs/screenshots/tui-firewall-nftables-staging.png)
+
+Applying the batch is one `nft -f` transaction: **all of the changes, or none**,
+never a half-applied ruleset. Before it runs, the whole transaction is previewed
+— the script that goes to `nft`'s standard input, which no single command line
+could show.
+
+![The atomic apply preview](docs/screenshots/tui-firewall-nftables-apply.png)
+
+The apply is also **connectivity-safe**. Just before the batch runs, the tool
+snapshots the current ruleset; then it applies, and starts a timer. If you press
+`k` to say you still have access, the batch stays. If you do not — because the
+change you just made cut off the session you are reading this in — the snapshot
+is restored automatically when the timer expires, and you are back on the ruleset
+that was working. It is the standard `iptables-apply` idea, done as one nft
+transaction.
+
 ## What v0.1 can do
 
-**Both backends**
+**Every backend**
 
 - Read the live firewall and show status, default policies and logging.
 - List rules with action, source, destination, ports, protocol, service,
@@ -416,6 +498,22 @@ collects the answers and previews whatever comes back. That is the same reason
   from the same guided form.
 - Zone target, log-denied value, reload, and the actions menu above.
 
+**nftables**
+
+- Read `nft -j list ruleset` and show every base and used regular chain, its
+  hook and its policy, as one group each.
+- The router reading of a rule: inbound and outbound interface, connection
+  state, protocol, port, address family, counter and comment.
+- A NAT view for masquerade, SNAT and DNAT port forwards, and an aliases view of
+  the named sets with the number of rules using each.
+- Add a rule with an action (accept/drop/reject), an interface pair, a
+  connection-state match, an ICMP type, an alias as the source, and a family;
+  add a masquerade, a port forward or a named set from the actions menu.
+- Write only to a base chain nft reported a policy for, or to the tool's own
+  table, and say why when it will not. Delete by handle.
+- Stage changes and apply them as one atomic `nft -f` transaction, with an
+  automatic connectivity-safe rollback if the apply is not kept in time.
+
 ## What v0.1 cannot do
 
 - **No rule editing.** Change a rule by deleting it and adding the new one.
@@ -427,7 +525,10 @@ collects the answers and previews whatever comes back. That is the same reason
 - **A firewalld policy object is read-only-ish**: its entries are listed and can
   be added and removed, but its target and its ingress/egress zones are not
   editable here.
-- **No live log tail**, no packet counters, no nft view.
+- **No live log tail.**
+- **No nftables rule editing or reordering**, and no set-element editing: a rule
+  is changed by deleting it and adding the new one, and a named set is created or
+  used, not edited member by member.
 - Rules follow the backend's own order; there is no reordering key.
 
 ## Compatibility
@@ -488,6 +589,14 @@ own smoke test appends to when it runs against a real machine in
 [tui-lab](https://github.com/tui-tools/tui-lab).
 <!-- compat:end -->
 
+The nftables backend shows no tested version yet because no smoke run has
+appended one to `compat/results.jsonl`. It has been exercised end to end in the
+[tui-lab](https://github.com/tui-tools/tui-lab) `router-topology` scenario — a
+libvirt router on Ubuntu noble, where the read path, the router matches, the NAT
+and alias views and the staged atomic apply were driven against a real `nft`,
+alongside the network-namespace tests in this repo. A tested version will land
+here once that run records one through the smoke test.
+
 ## Configuration
 
 `/etc/tui-firewall/config.toml`, then `~/.config/tui-firewall/config.toml` (the
@@ -536,14 +645,21 @@ ufw exposes a single group (`rules`) carrying the global in/out/routed
 policies; the group selector stays hidden when there is only one. firewalld
 exposes one group per zone with the zone target as its policy, plus one per
 policy object — the full mapping is documented at the top of
-`internal/firewalld/firewalld.go`.
+`internal/firewalld/firewalld.go`. nftables exposes one group per hooked or used
+chain with its policy, plus a NAT view and an aliases view; the `Extra` map is
+where the router-shaped fields ride — interface, connection state, counter,
+translated target, set membership — so the same `Rule` serves every backend
+without the model growing a column per feature.
 
 Mutations are `firewall.Change` values produced by the backend: an ordered list
 of `runner.Command`s with the description and the danger flag the dialog is
 painted from. The list exists because firewalld needs two invocations to apply
 one change, and making that a list rather than a hidden second exec keeps the
 promise intact — every line the dialog shows is a line that runs, and nothing
-else does. On confirmation the UI hands those commands back to the
+else does. On nftables a staged batch is the same idea taken to its limit: the
+whole set of changes is one `nft -f` transaction, previewed as the script it
+sends, applied all-or-nothing, and rolled back to a pre-apply snapshot if the
+operator does not confirm they still have access in time. On confirmation the UI hands those commands back to the
 [kit runner](https://github.com/tui-tools/tui-kit#the-contract-preview-confirm-run),
 which resolves the binary and the privilege prefix. That is the whole trust
 boundary.
