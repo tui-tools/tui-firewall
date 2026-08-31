@@ -30,7 +30,7 @@ table inet tui {
 		ip6 saddr @lan6_hosts tcp dport 22 counter accept comment "admin from lan v6"
 		iifname "wan0" tcp dport 22 counter drop comment "no ssh from the wan"
 		iifname "wan0" ip protocol icmp counter accept comment "ping from the wan"
-		counter log prefix "tui input drop " level info
+		counter log prefix "tui:input drop " level info
 	}
 
 	chain output {

@@ -92,8 +92,19 @@ type Match struct {
 	Counter *Counter `json:"counter,omitempty"`
 	// NAT is the translation the rule performs, when it performs one.
 	NAT *NAT `json:"nat,omitempty"`
-	// Log reports that the rule logs what it matches.
-	Log bool `json:"log,omitempty"`
+	// Log reports that the rule logs what it matches. LogPrefix, LogLevel and
+	// LogGroup carry the log statement's own arguments, so the statement round
+	// trips: what the reader decodes is what the toggle rebuilds. LogGroup is
+	// the nflog group when the statement is an `nflog group N` rather than a
+	// plain kernel `log`.
+	Log       bool   `json:"log,omitempty"`
+	LogPrefix string `json:"logPrefix,omitempty"`
+	LogLevel  string `json:"logLevel,omitempty"`
+	LogGroup  string `json:"logGroup,omitempty"`
+	// RejectWith is the "with …" payload of a reject statement — "tcp reset",
+	// "icmp port-unreachable" — kept so a reject rule round trips through the
+	// log toggle instead of losing the answer it sends.
+	RejectWith string `json:"rejectWith,omitempty"`
 	// Sets lists every named set this rule refers to, in order. It is what
 	// the alias reference count is computed from.
 	Sets []string `json:"sets,omitempty"`

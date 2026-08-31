@@ -129,6 +129,9 @@ const (
 	// ExtraDetail is a one-line rendering of everything the columns of this
 	// view had no room for.
 	ExtraDetail = "detail"
+	// ExtraLog marks a rule that logs the packets it matches, so the row can
+	// carry a LOG tag. Its value is the log prefix when the rule has one.
+	ExtraLog = "log"
 )
 
 // Rule is one entry of a Group, in backend-neutral terms.

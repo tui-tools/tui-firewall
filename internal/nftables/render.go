@@ -46,6 +46,7 @@ func decodeStatement(m *Match, key string, value any) string {
 		return key
 	case "reject":
 		m.Verdict = "reject"
+		m.RejectWith = rejectDetail(value)
 		return renderReject(value)
 	case "jump", "goto":
 		target := targetOf(value)
@@ -53,7 +54,13 @@ func decodeStatement(m *Match, key string, value any) string {
 		return m.Verdict
 	case "log":
 		m.Log = true
-		return renderLog(value)
+		return decodeLog(m, value)
+	case "nflog":
+		// nftables spells userspace logging as its own `nflog` statement. It
+		// is the same fact the columns record — this rule logs — with the group
+		// number kept so the statement round trips.
+		m.Log = true
+		return decodeNflog(m, value)
 	case "masquerade":
 		m.NAT = &NAT{Kind: "masquerade"}
 		m.Verdict = "masquerade"
@@ -344,7 +351,65 @@ func renderReject(value any) string {
 	return out
 }
 
-// renderLog renders a log statement with its prefix and level.
+// decodeLog folds a log statement into the Match — the fact that the rule logs,
+// and the prefix, level and group it logs with — and returns its text.
+func decodeLog(m *Match, value any) string {
+	obj, _ := value.(map[string]any)
+	if prefix, _ := obj["prefix"].(string); prefix != "" {
+		// The prefix keeps its own spaces — nft's trailing space is what stops
+		// "tui:input drop" running into "IN=eth0" in the kernel log — but any
+		// control character in it is flattened, since it still lands in a cell.
+		m.LogPrefix = sanitizeLog(prefix)
+	}
+	if level, _ := obj["level"].(string); level != "" {
+		m.LogLevel = oneLine(level)
+	}
+	// A log statement carrying a group number is an nflog in disguise; the
+	// group is kept so the statement round trips whichever spelling it arrived
+	// in.
+	if group, ok := obj["group"]; ok {
+		m.LogGroup = oneLine(renderOperand(group))
+	}
+	return renderLog(value)
+}
+
+// decodeNflog folds an nflog statement, which always carries a group.
+func decodeNflog(m *Match, value any) string {
+	obj, _ := value.(map[string]any)
+	if group, ok := obj["group"]; ok {
+		m.LogGroup = oneLine(renderOperand(group))
+	} else {
+		// nflog with no explicit group is group 0, which is what the kernel
+		// uses; recording it keeps LogGroup a fact rather than a blank.
+		m.LogGroup = "0"
+	}
+	if prefix, _ := obj["prefix"].(string); prefix != "" {
+		m.LogPrefix = sanitizeLog(prefix)
+	}
+	out := "nflog"
+	if m.LogPrefix != "" {
+		out += " prefix " + strconv.Quote(m.LogPrefix)
+	}
+	if m.LogGroup != "" {
+		out += " group " + m.LogGroup
+	}
+	return out
+}
+
+// sanitizeLog flattens control characters in a log prefix to spaces without
+// trimming the surrounding whitespace, because a log prefix's own trailing
+// space is part of it — it is what nft puts between the prefix and the packet
+// fields in the kernel log line the live view then parses.
+func sanitizeLog(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' || (r >= 0 && r < 0x20) || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, value)
+}
+
+// renderLog renders a log statement with its prefix, level and group.
 func renderLog(value any) string {
 	obj, ok := value.(map[string]any)
 	if !ok || len(obj) == 0 {
@@ -354,10 +419,35 @@ func renderLog(value any) string {
 	if prefix, _ := obj["prefix"].(string); prefix != "" {
 		out += " prefix " + strconv.Quote(prefix)
 	}
+	if group, ok := obj["group"]; ok {
+		out += " group " + renderOperand(group)
+	}
 	if level, _ := obj["level"].(string); level != "" {
 		out += " level " + level
 	}
 	return out
+}
+
+// rejectDetail renders the "with …" payload of a reject statement, or "" for a
+// bare reject. It is the half of renderReject the log toggle needs to rebuild a
+// reject rule without changing the answer it sends.
+func rejectDetail(value any) string {
+	obj, ok := value.(map[string]any)
+	if !ok || len(obj) == 0 {
+		return ""
+	}
+	out := ""
+	if kind, _ := obj["type"].(string); kind != "" {
+		out = "with " + kind
+	}
+	if expr := renderOperand(obj["expr"]); expr != "" {
+		if out == "" {
+			out = "with " + expr
+		} else {
+			out += " " + expr
+		}
+	}
+	return oneLine(out)
 }
 
 // renderUnknown renders a statement this package has no column for, keeping

@@ -137,6 +137,15 @@ func describeReferences(count string) string {
 	return count
 }
 
+// logTag renders the LOG column: a mark on a rule that logs, a dash on one that
+// does not.
+func logTag(rule firewall.Rule) string {
+	if rule.Extra[firewall.ExtraLog] != "" {
+		return "LOG"
+	}
+	return "-"
+}
+
 // orDash renders an empty cell as a dash, so a column of blanks does not read
 // as a column of missing data.
 func orDash(value string) string {
@@ -186,6 +195,9 @@ func (a *app) flowRuleTable() string {
 	showProto := a.width >= 70
 	showFamily := a.width >= 78 &&
 		anyRule(a.visible, func(r firewall.Rule) bool { return r.Family != "" })
+	showLog := anyRule(a.visible, func(r firewall.Rule) bool {
+		return r.Extra[firewall.ExtraLog] != ""
+	})
 	showCounter := a.width >= 96
 	showComment := a.width >= 110
 	if showProto {
@@ -198,6 +210,11 @@ func (a *app) flowRuleTable() string {
 		ui.Column{Title: "SOURCE", Width: 16, Flex: true},
 		ui.Column{Title: "DESTINATION", Width: 16, Flex: true},
 		ui.Column{Title: "PORT", Width: 9})
+	if showLog {
+		// A LOG tag on the rules that log, so "which rules feed the live view"
+		// is answerable from the list itself.
+		columns = append(columns, ui.Column{Title: "LOG", Width: 3})
+	}
 	if showCounter {
 		columns = append(columns, ui.Column{Title: "COUNTER", Width: 12})
 	}
@@ -221,6 +238,9 @@ func (a *app) flowRuleTable() string {
 			row = append(row, familyLabel(rule.Family))
 		}
 		row = append(row, rule.From, rule.To, orDash(rule.Ports))
+		if showLog {
+			row = append(row, logTag(rule))
+		}
 		if showCounter {
 			row = append(row, rule.Extra[firewall.ExtraCounter])
 		}

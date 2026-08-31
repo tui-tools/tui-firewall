@@ -276,6 +276,15 @@ func FuzzDecodeExprs(f *testing.F) {
 		`[{"match":{"left":{"payload":{"protocol":"icmp","field":"type"}},` +
 			`"right":"echo-request"}},{"match":{"left":{"payload":` +
 			`{"protocol":"ip","field":"protocol"}},"right":"icmp"}}]`,
+		// The log and nflog shapes item 10 models: a kernel log with a prefix
+		// and level, a log carrying a group (an nflog in disguise), a bare
+		// nflog, and a reject whose "with" answer must survive.
+		`[{"log":{"prefix":"tui:input drop ","level":"info"}},{"drop":null}]`,
+		`[{"log":{"prefix":"tui:input ","group":2}}]`,
+		`[{"nflog":{"group":5,"prefix":"tui:forward accept "}},{"accept":null}]`,
+		`[{"nflog":null}]`,
+		`[{"reject":{"type":"tcp reset"}}]`,
+		`[{"reject":{"type":"icmpx","expr":"admin-prohibited"}}]`,
 	} {
 		f.Add([]byte(shape))
 	}

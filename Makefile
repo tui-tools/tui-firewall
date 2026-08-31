@@ -82,6 +82,10 @@ screenshots: build
 		--screen 'nftables-nat=[[' --screen 'nftables-aliases=[' \
 		--screen nftables-staging=sdjdS \
 		--screen 'nftables-apply=sdjdS\r'
+	python3 $(KIT)/tools/render-screenshots.py \
+		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
+		--args="--demo=nftables" --settle 1.0 --budget 7.0 \
+		--screen nftables-live=w
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

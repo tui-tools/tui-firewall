@@ -165,6 +165,8 @@ func (f *Fake) applyStatement(args []string) (string, error) {
 		return f.addChain(operands)
 	case "add rule", "insert rule":
 		return f.addRule(operands, verb == "insert")
+	case "replace rule":
+		return f.replaceRule(operands)
 	case "delete rule":
 		return f.deleteRule(operands)
 	case "add set":
@@ -413,6 +415,46 @@ func (f *Fake) addRule(operands []string, insert bool) (string, error) {
 	renumber(chain)
 	f.ruleset.countReferences()
 	return "rule added with handle " + strconv.Itoa(rule.Handle), nil
+}
+
+// replaceRule swaps a rule's expression in place, keeping its handle and
+// position. It is how `nft replace rule … handle H …` behaves, and it is the
+// command the log toggle builds: the demo applies it so the row the toggle
+// previews is the row the demo shows afterwards.
+func (f *Fake) replaceRule(operands []string) (string, error) {
+	id, rest, err := take(operands)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) < 3 || rest[1] != "handle" {
+		return "", errorf("a rule is replaced by handle")
+	}
+	chain, err := f.chain(id, rest[0])
+	if err != nil {
+		return "", err
+	}
+	handle, err := strconv.Atoi(rest[2])
+	if err != nil {
+		return "", errorf("%q is not a handle", rest[2])
+	}
+	expr := rest[3:]
+	for i := range chain.Rules {
+		if chain.Rules[i].Handle != handle {
+			continue
+		}
+		rebuilt := Rule{
+			Table:  id,
+			Chain:  chain.Name,
+			Handle: handle,
+			Index:  chain.Rules[i].Index,
+		}
+		rebuilt.Match, rebuilt.Comment = matchFromArgs(expr)
+		rebuilt.Raw = strings.Join(stripQuotes(expr), " ")
+		chain.Rules[i] = rebuilt
+		f.ruleset.countReferences()
+		return "rule " + rest[2] + " replaced", nil
+	}
+	return "", errorf("chain %s has no rule with handle %d", chain.Name, handle)
 }
 
 // deleteRule removes a rule by handle.
@@ -670,8 +712,13 @@ func matchFromArgs(args []string) (Match, string) {
 			}
 		case "counter":
 			m.Counter = &Counter{}
-		case "log":
+		case "log", "nflog":
 			m.Log = true
+		case "prefix":
+			if i > 0 && (args[i-1] == "log" || args[i-1] == "nflog") ||
+				m.Log && m.LogPrefix == "" {
+				m.LogPrefix = value(i)
+			}
 		case "accept", "drop", "reject", "return", "continue":
 			m.Verdict = args[i]
 		case "masquerade":
@@ -754,6 +801,11 @@ func (f *Fake) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Chan
 // BuildDeleteRule removes the selected row.
 func (f *Fake) BuildDeleteRule(group string, rule firewall.Rule) (firewall.Change, error) {
 	return f.Ruleset().DeleteRule(group, rule)
+}
+
+// BuildToggleLog turns per-rule logging on or off for the selected row.
+func (f *Fake) BuildToggleLog(group string, rule firewall.Rule) (firewall.Change, error) {
+	return f.Ruleset().ToggleLog(group, rule)
 }
 
 // BuildSetEnabled always refuses: nftables has no on/off switch.

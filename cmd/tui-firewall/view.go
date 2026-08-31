@@ -39,6 +39,8 @@ func (a *app) View() string {
 	case modeHelp:
 		return placeCenter(ui.HelpScreen(a.theme, "tui-firewall — keys", helpKeys(), a.width),
 			a.width, a.height)
+	case modeLog:
+		return a.logView()
 	}
 	return body
 }
@@ -387,6 +389,14 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 		hints = append(hints,
 			ui.KeyHint{Key: "L", Desc: strings.ToLower(a.loggingLabel())})
 	}
+	// The per-rule log toggle and the live view are offered only where the
+	// backend can do them: the nftables backend and its demo.
+	if _, ok := a.backend.(logToggler); ok {
+		hints = append(hints, ui.KeyHint{Key: "l", Desc: "log rule"})
+	}
+	if _, ok := a.backend.(logStreamer); ok {
+		hints = append(hints, ui.KeyHint{Key: "w", Desc: "live log"})
+	}
 	if len(a.backend.Extras(a.model, a.group)) > 0 {
 		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
 	}
@@ -420,7 +430,9 @@ func helpKeys() []ui.KeyHint {
 		{Key: "e", Desc: "enable or disable the firewall (ufw)"},
 		{Key: "r", Desc: "reload the firewall"},
 		{Key: "p", Desc: "change a default policy or a zone target"},
-		{Key: "L", Desc: "change the logging level or log-denied value"},
+		{Key: "L", Desc: "change the logging level or log-denied value (ufw, firewalld)"},
+		{Key: "l", Desc: "toggle logging on the selected rule (nftables)"},
+		{Key: "w", Desc: "watch the live firewall log of the logged rules (nftables)"},
 		{Key: "x", Desc: "actions this backend offers beyond these keys"},
 		{Key: "[ / ]", Desc: "previous / next group (multi-group backends)"},
 		{Key: "v", Desc: "pick a group: a firewalld zone, an nftables chain, NAT, aliases"},

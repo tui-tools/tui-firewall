@@ -143,3 +143,71 @@ func runNft(t *testing.T, stdin string, args ...string) string {
 	}
 	return string(out)
 }
+
+// TestToggleLogAgainstRealNft drives the per-rule log toggle against a real nft
+// in a private network namespace. It proves the exact argv the toggle builds —
+// a `replace rule … log prefix …`, and the reverse without the log — is one
+// this nft accepts, and that the log statement round-trips through `nft -j`.
+//
+//	unshare -rn env TUI_FW_NS_TEST=1 go test -run TestToggleLogAgainstRealNft \
+//	    -v ./internal/nftables/
+func TestToggleLogAgainstRealNft(t *testing.T) {
+	if os.Getenv("TUI_FW_NS_TEST") == "" {
+		t.Skip("set TUI_FW_NS_TEST=1 and run under `unshare -rn` to drive real nft")
+	}
+
+	setup := "add table inet tui\n" +
+		"add chain inet tui input { type filter hook input priority 0 ; policy accept ; }\n" +
+		"add rule inet tui input iifname \"wan0\" tcp dport 22 counter drop comment \"no ssh from the wan\"\n"
+	runNft(t, setup, "-f", "-")
+
+	// Toggle logging ON, off the ruleset nft reports, with the real builder.
+	rs := mustParse(t, runNft(t, "", "-j", "list", "ruleset"))
+	input, ok := rs.Chain(OwnTable, "input")
+	if !ok {
+		t.Fatal("the input chain was not created")
+	}
+	rule := input.Rules[0]
+	on, err := rs.BuildToggleLog(input, rule)
+	if err != nil {
+		t.Fatalf("BuildToggleLog (on): %v", err)
+	}
+	t.Logf("toggle on: %s", strings.Join(on.Commands[0].Argv, " "))
+	runNft(t, "", on.Commands[0].Argv[1:]...)
+
+	after := runNft(t, "", "list", "ruleset")
+	if !strings.Contains(after, `log prefix "tui:input drop "`) {
+		t.Errorf("the log statement did not land:\n%s", after)
+	}
+
+	// The JSON round-trips: the reader sees the rule as logging, with the prefix.
+	rs2 := mustParse(t, runNft(t, "", "-j", "list", "ruleset"))
+	input2, _ := rs2.Chain(OwnTable, "input")
+	if !input2.Rules[0].Match.Log {
+		t.Error("the reloaded rule does not report as logging")
+	}
+	if got := input2.Rules[0].Match.LogPrefix; got != "tui:input drop " {
+		t.Errorf("LogPrefix = %q, want the prefix the toggle wrote", got)
+	}
+
+	// Toggle logging OFF: the replacement without the log statement.
+	off, err := rs2.BuildToggleLog(input2, input2.Rules[0])
+	if err != nil {
+		t.Fatalf("BuildToggleLog (off): %v", err)
+	}
+	t.Logf("toggle off: %s", strings.Join(off.Commands[0].Argv, " "))
+	runNft(t, "", off.Commands[0].Argv[1:]...)
+	if final := runNft(t, "", "list", "ruleset"); strings.Contains(final, "log prefix") {
+		t.Errorf("the log statement was not removed:\n%s", final)
+	}
+}
+
+// mustParse parses a ruleset JSON in a test, failing on error.
+func mustParse(t *testing.T, data string) Ruleset {
+	t.Helper()
+	rs, err := ParseRuleset([]byte(data))
+	if err != nil {
+		t.Fatalf("parsing the ruleset: %v", err)
+	}
+	return rs
+}

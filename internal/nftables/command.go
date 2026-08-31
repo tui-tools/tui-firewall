@@ -238,6 +238,276 @@ func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, 
 	return expr, nil
 }
 
+// LogPrefixMarker is the leader every log prefix this tool writes begins with.
+// It is what the live log view greps the kernel log for, so it has to be short,
+// stable and unlikely to collide with anything else's logging. The chain name
+// and the verdict follow it, which is how the live view reads a packet's
+// direction and the action the rule took off the prefix alone.
+const LogPrefixMarker = "tui:"
+
+// logPrefix builds the prefix a logged rule carries: the marker, the chain the
+// rule lives in, and — when the rule decides — the verdict it applies. nft
+// appends the packet's own fields straight after the prefix, so the trailing
+// space keeps "tui:input drop" from running into "IN=eth0".
+func logPrefix(chain, verdict string) string {
+	prefix := LogPrefixMarker + chain + " "
+	if verdict != "" {
+		prefix += verdict + " "
+	}
+	return prefix
+}
+
+// BuildToggleLog turns per-rule logging on or off for a rule this backend owns.
+//
+// nftables rules are immutable: a statement cannot be added to one in place, so
+// the only way to add or remove a log statement is to replace the whole rule.
+// `nft replace rule … handle H …` does exactly that, keeping the handle and the
+// position, and the replacement is rebuilt from the rule's own modelled match
+// so the preview shows precisely the rule that will stand afterwards. A rule the
+// model does not hold in full — one carrying a match this package renders only
+// as text, a NAT translation, or a verdict other than accept/drop/reject — is
+// refused rather than rebuilt from a rendering that might drop half of it.
+func (r Ruleset) BuildToggleLog(chain Chain, target Rule) (firewall.Change, error) {
+	if err := r.checkMutable(chain); err != nil {
+		return firewall.Change{}, err
+	}
+	if target.Handle <= 0 {
+		return firewall.Change{}, errorf(
+			"this rule has no handle, so there is no safe way to name it to nft; " +
+				"re-read the ruleset with R")
+	}
+	expr, err := logToggleExpr(chain, target)
+	if err != nil {
+		return firewall.Change{}, err
+	}
+
+	argv := []string{"nft", "replace", "rule"}
+	argv = append(argv, chain.Table.Args()...)
+	argv = append(argv, chain.Name, "handle", strconv.Itoa(target.Handle))
+	argv = append(argv, expr...)
+
+	action := "Log matches of"
+	if target.Match.Log {
+		action = "Stop logging"
+	}
+	return firewall.One(firewall.Command{
+		Argv: argv,
+		Description: fmt.Sprintf("%s rule handle %d in %s",
+			action, target.Handle, chain.Name),
+		// Replacing a rule resets its counter; that is a change worth the danger
+		// colour even though it neither opens nor closes the firewall.
+		Destructive: true,
+	}), nil
+}
+
+// logToggleExpr rebuilds a rule's whole expression with its logging flipped:
+// the log statement added when the rule does not log, removed when it does. The
+// statements come out in the order nft prints them, the same order the add-rule
+// builder uses, so the replacement reads like the rule the list will show.
+func logToggleExpr(chain Chain, rule Rule) ([]string, error) {
+	m := rule.Match
+	if m.NAT != nil {
+		return nil, errorf(
+			"rule handle %d translates addresses; logging is toggled from the "+
+				"filter views, not the NAT one", rule.Handle)
+	}
+	if len(m.Unmodeled) > 0 {
+		return nil, errorf(
+			"rule handle %d carries a match this tool shows only as text (%s), so "+
+				"it cannot be rebuilt safely to toggle logging; edit it with nft "+
+				"directly", rule.Handle, strings.Join(m.Unmodeled, "; "))
+	}
+	switch m.Verdict {
+	case "accept", "drop", "reject", "":
+	default:
+		return nil, errorf(
+			"per-rule logging is toggled on accept, drop and reject rules; rule "+
+				"handle %d is a %q rule", rule.Handle, m.Verdict)
+	}
+
+	var expr []string
+	ifaces, err := interfaceSelectors(m.IIF, m.OIF)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, ifaces...)
+	if m.CTState != "" {
+		expr = append(expr, "ct", "state", m.CTState)
+	}
+
+	addrs, err := addressExprs(chain, m)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, addrs...)
+
+	l4, err := protoExprs(chain, m)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, l4...)
+
+	// The toggle: add the log statement when the rule does not log, drop it when
+	// it does. A rule that logs and nothing else keeps its bare counter.
+	if !m.Log {
+		expr = append(expr, "log", "prefix", quote(logPrefix(chain.Name, m.Verdict)))
+	}
+	expr = append(expr, "counter")
+
+	verdict, err := verdictExpr(m)
+	if err != nil {
+		return nil, err
+	}
+	expr = append(expr, verdict...)
+
+	if rule.Comment != "" {
+		if strings.ContainsAny(rule.Comment, "\n\r\"") {
+			return nil, errorf("rule handle %d has a comment nft would not "+
+				"round-trip", rule.Handle)
+		}
+		expr = append(expr, "comment", quote(rule.Comment))
+	}
+	if len(expr) == 0 {
+		return nil, errorf(
+			"rule handle %d has no match this tool models, so toggling its log "+
+				"would rewrite it as a match-everything rule", rule.Handle)
+	}
+	return expr, nil
+}
+
+// addressExprs rebuilds the saddr and daddr matches of a modelled rule, with
+// the address-family header nft prints in front of each.
+func addressExprs(chain Chain, m Match) ([]string, error) {
+	var expr []string
+	for _, addr := range []struct {
+		field string
+		value string
+	}{{"saddr", m.Saddr}, {"daddr", m.Daddr}} {
+		if addr.value == "" {
+			continue
+		}
+		header := addrHeader(chain, m)
+		if header == "" {
+			return nil, errorf(
+				"could not tell which address family %q belongs to, so the rule "+
+					"cannot be rebuilt to toggle its log", addr.value)
+		}
+		selector, err := addressSelector(header, addr.field, addr.value)
+		if err != nil {
+			return nil, err
+		}
+		expr = append(expr, selector...)
+	}
+	return expr, nil
+}
+
+// addrHeader picks the `ip`/`ip6` header word a rebuilt address match needs:
+// the table's own family when it has one, otherwise the family the rule's
+// operands pinned it to.
+func addrHeader(chain Chain, m Match) string {
+	switch chain.Table.Family {
+	case "ip":
+		return "ip"
+	case "ip6":
+		return "ip6"
+	}
+	switch m.Family() {
+	case "v4":
+		return "ip"
+	case "v6":
+		return "ip6"
+	}
+	return ""
+}
+
+// protoExprs rebuilds the layer-4 match of a modelled rule: the ICMP forms, a
+// port match, or a bare protocol.
+func protoExprs(chain Chain, m Match) ([]string, error) {
+	switch m.Proto {
+	case "icmp", "icmpv6":
+		return icmpSelector(chain, m.Proto, "", m.ICMPType)
+	}
+	if m.ICMPType != "" {
+		return nil, errorf("an ICMP type only applies to the icmp and icmpv6 protocols")
+	}
+	if m.DPort != "" {
+		return portMatchExpr(m.Proto, "dport", m.DPort)
+	}
+	if m.SPort != "" {
+		return portMatchExpr(m.Proto, "sport", m.SPort)
+	}
+	if m.Proto != "" {
+		if err := checkOperand(m.Proto); err != nil {
+			return nil, err
+		}
+		return []string{"meta", "l4proto", m.Proto}, nil
+	}
+	return nil, nil
+}
+
+// portMatchExpr rebuilds a `tcp dport …` match from the port the model holds,
+// whichever shape nft printed it in: a single value, a range, an alias, or the
+// braced set the reader renders as "{ 80, 443 }".
+func portMatchExpr(proto, field, port string) ([]string, error) {
+	if proto == "" {
+		return nil, errorf("a port match needs a protocol")
+	}
+	if err := checkOperand(proto); err != nil {
+		return nil, err
+	}
+	value := strings.TrimSpace(port)
+	if inner, ok := strings.CutPrefix(value, "{"); ok {
+		// A braced set the reader rendered as "{ 80, 443 }" is rebuilt element
+		// by element, each a word of its own the way the add-rule builder emits
+		// them, so no operand can smuggle nft syntax through.
+		inner = strings.TrimSuffix(inner, "}")
+		argv := []string{proto, field, "{"}
+		items := strings.Split(inner, ",")
+		for i, item := range items {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				return nil, errorf("empty value in port set %q", port)
+			}
+			if err := checkOperand(item); err != nil {
+				return nil, err
+			}
+			if i < len(items)-1 {
+				item += ","
+			}
+			argv = append(argv, item)
+		}
+		return append(argv, "}"), nil
+	}
+	if err := checkOperand(value); err != nil {
+		return nil, err
+	}
+	return []string{proto, field, value}, nil
+}
+
+// verdictExpr rebuilds a rule's terminal statement. A reject keeps the answer
+// it sends, which is why RejectWith is modelled at all.
+func verdictExpr(m Match) ([]string, error) {
+	switch m.Verdict {
+	case "accept", "drop":
+		return []string{m.Verdict}, nil
+	case "reject":
+		expr := []string{"reject"}
+		for _, word := range strings.Fields(m.RejectWith) {
+			if err := checkOperand(word); err != nil {
+				return nil, err
+			}
+			expr = append(expr, word)
+		}
+		return expr, nil
+	case "":
+		// A rule that only logs has no verdict of its own; it falls through to
+		// the chain policy, which is what the fixture's tail log rule does.
+		return nil, nil
+	default:
+		return nil, errorf("cannot rebuild a %q verdict", m.Verdict)
+	}
+}
+
 // addressFamily decides which header a rule's address matches read from. In
 // an `inet` table both families share one chain, so an address match has to
 // say which one it means; in an `ip` or `ip6` table the table has already
