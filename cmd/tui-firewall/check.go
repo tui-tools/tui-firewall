@@ -88,6 +88,27 @@ type nftablesFacts struct {
 	// Staging reports the connectivity-safe apply: whether this backend offers
 	// it, and — in an interactive session — whether a batch is active.
 	Staging stagingFacts `json:"staging"`
+	// Logging reports the per-rule log feature: how many rules log, how many of
+	// those this backend owns, and whether the live log source can be read.
+	Logging logFacts `json:"logging"`
+}
+
+// logFacts is the per-rule-logging block of --check: whether any owned rule
+// logs, and whether the live view's source (the journald kernel log) is there
+// to read.
+type logFacts struct {
+	// LoggedRules is how many rules in a chain this backend may write to log;
+	// LoggedRulesTotal counts every logging rule, owned or not.
+	LoggedRules      int `json:"loggedRules"`
+	LoggedRulesTotal int `json:"loggedRulesTotal"`
+	// LiveSource names the live view's source, LiveReadable reports whether it
+	// can be read, and LiveDetail says why.
+	LiveSource   string `json:"liveSource"`
+	LiveReadable bool   `json:"liveReadable"`
+	LiveDetail   string `json:"liveDetail"`
+	// Prefix is the marker every log prefix this tool writes begins with, which
+	// is what the live view greps.
+	Prefix string `json:"prefix"`
 }
 
 // stagingFacts is the staging block of --check: staging is a mode of the
@@ -154,6 +175,23 @@ func collectNftablesFacts(backend firewall.Backend, model firewall.Model) *nftab
 	facts.Staging = stagingFacts{
 		Supported:      supported,
 		TimeoutSeconds: int(staging.DefaultTimeout.Seconds()),
+	}
+	// Per-rule logging: how many owned rules log, and whether the live source is
+	// readable. The source probe reads the machine (is journald here) rather
+	// than the ruleset, so a demo backend reports the demo source instead.
+	owned, total := ruleset.LoggedRules()
+	liveReadable, liveSource, liveDetail := nftables.LogSourceProbe()
+	if backend.Name() == "demo" {
+		liveReadable, liveSource, liveDetail = true, "demo synthetic stream",
+			"the demo live view plays a synthetic feed; nothing on this machine is read"
+	}
+	facts.Logging = logFacts{
+		LoggedRules:      owned,
+		LoggedRulesTotal: total,
+		LiveSource:       liveSource,
+		LiveReadable:     liveReadable,
+		LiveDetail:       liveDetail,
+		Prefix:           nftables.LogPrefixMarker,
 	}
 	return facts
 }

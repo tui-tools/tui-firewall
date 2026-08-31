@@ -122,6 +122,15 @@ func describeNftables(cfg config.Config) string {
 	if management := nftables.DetectManagement(ruleset); management.Managed() {
 		parts = append(parts, "read-only: "+management.Detail)
 	}
+	// Per-rule logging and its live source: how many owned rules log, and
+	// whether the live view could read the kernel log on this machine.
+	owned, total := ruleset.LoggedRules()
+	readable, _, _ := nftables.LogSourceProbe()
+	live := "live log source not readable (no journald)"
+	if readable {
+		live = "live log source readable (journald)"
+	}
+	parts = append(parts, fmt.Sprintf("%d/%d rules log (%s)", owned, total, live))
 	// Staging is always available on this backend; a report says so, with the
 	// keep-confirmation window a batch would apply under, because "does this
 	// build have the atomic apply" is a question a bug report has to answer.

@@ -27,6 +27,11 @@ const installHint = "install it (apt install nftables / dnf install nftables / "
 // runner that printed the preview.
 type Real struct {
 	run *runner.Runner
+	// sudoPrefix is the escalation prefix the runner was built with, kept so the
+	// live log view can wrap journalctl the same way nft is wrapped. The live
+	// stream reads journald rather than nft, so it does not go through the nft
+	// runner, but it needs the same privilege to read the kernel log.
+	sudoPrefix []string
 
 	// mu guards ruleset, which is the state the command builders decide
 	// against: which chains exist, which of them have a policy, how many
@@ -51,7 +56,7 @@ func NewReal(sudoPrefix []string) (*Real, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Real{run: r}, nil
+	return &Real{run: r, sudoPrefix: sudoPrefix}, nil
 }
 
 // Name identifies the backend.
@@ -120,6 +125,11 @@ func (r *Real) BuildAddRule(group string, spec firewall.RuleSpec) (firewall.Chan
 // BuildDeleteRule removes the selected row.
 func (r *Real) BuildDeleteRule(group string, rule firewall.Rule) (firewall.Change, error) {
 	return r.Ruleset().DeleteRule(group, rule)
+}
+
+// BuildToggleLog turns per-rule logging on or off for the selected row.
+func (r *Real) BuildToggleLog(group string, rule firewall.Rule) (firewall.Change, error) {
+	return r.Ruleset().ToggleLog(group, rule)
 }
 
 // BuildSetEnabled always refuses: nftables has no on/off switch.

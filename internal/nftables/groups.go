@@ -189,10 +189,17 @@ func renderRule(rule Rule, direction firewall.Direction) firewall.Rule {
 			firewall.ExtraDetail:   ruleDetail(match),
 		},
 	}
-	if out.Action == "" && match.Log {
-		// A rule that logs and does not decide is still doing something, and
-		// an empty verdict column would say it is not.
-		out.Action = "LOG"
+	if match.Log {
+		// A rule that logs carries a LOG marker in its own column, whatever its
+		// verdict; a drop that logs and an accept that logs are both worth
+		// seeing at a glance. The prefix is kept as the marker's value so the
+		// detail line can show what the live view will grep for.
+		out.Extra[firewall.ExtraLog] = orLog(match.LogPrefix)
+		if out.Action == "" {
+			// A rule that logs and does not decide is still doing something, and
+			// an empty verdict column would say it is not.
+			out.Action = "LOG"
+		}
 	}
 	if match.Counter != nil {
 		out.Extra[firewall.ExtraCounter] = match.Counter.String()
@@ -202,6 +209,15 @@ func renderRule(rule Rule, direction firewall.Direction) firewall.Rule {
 		out.Extra[firewall.ExtraTarget] = match.NAT.String()
 	}
 	return out
+}
+
+// orLog renders a log marker's value: the prefix when the rule has one, or the
+// bare word when it logs with none.
+func orLog(prefix string) string {
+	if prefix == "" {
+		return "LOG"
+	}
+	return prefix
 }
 
 // ruleDetail renders the one-line note the flow table shows beside a rule: the

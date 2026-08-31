@@ -360,7 +360,7 @@ func TestParseRulesetLogStatement(t *testing.T) {
 		t.Errorf("verdict = %q, want empty: the rule logs and falls through",
 			last.Match.Verdict)
 	}
-	if !strings.Contains(last.Raw, `log prefix "tui input drop " level info`) {
+	if !strings.Contains(last.Raw, `log prefix "tui:input drop " level info`) {
 		t.Errorf("Raw = %q, want the log prefix and level", last.Raw)
 	}
 }

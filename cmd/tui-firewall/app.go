@@ -26,6 +26,7 @@ const (
 	modePicker
 	modeForm
 	modeHelp
+	modeLog
 )
 
 // pickerTarget says what a picker's answer applies to.
@@ -97,6 +98,11 @@ type app struct {
 	// keepTickPending asks the next load to start the rollback countdown, so
 	// the applied batch is on screen before its keep window begins.
 	keepTickPending bool
+
+	// live holds the live-log view: the open stream, the events retained, and
+	// whether the feed is paused. It is only reachable on the nftables backend
+	// and its demo, the ones that implement logStreamer.
+	live liveLog
 
 	status     string
 	statusKind ui.StatusKind
@@ -267,6 +273,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.openApplyConfirm(msg.change)
 		return a, nil
 
+	case logEventMsg:
+		return a, a.handleLogEvent(msg)
+
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 	}
@@ -307,6 +316,8 @@ func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeHelp:
 		a.mode = modeTable
 		return a, nil
+	case modeLog:
+		return a.handleLogKey(msg)
 	default:
 		return a.handleTableKey(msg)
 	}
@@ -537,6 +548,10 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.openPolicySlotPicker()
 	case "L":
 		return a, a.openLoggingPicker()
+	case "l":
+		return a, a.confirmToggleLog()
+	case "w":
+		return a, a.openLogView()
 	case "x":
 		return a, a.openExtrasMenu()
 	case "v":

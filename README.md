@@ -312,6 +312,8 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `r` | Reload the firewall |
 | `p` | Change a default policy (ufw) or a zone target (firewalld) |
 | `L` | Change the logging level (ufw) or the log-denied value (firewalld) |
+| `l` | Toggle logging on the selected rule (nftables) |
+| `w` | Watch the live firewall log of the logged rules (nftables) |
 | `x` | Actions this backend offers beyond these keys |
 | `[` / `]` | Previous / next group — the firewalld zones and policy objects |
 | `R` | Re-read the firewall |
@@ -462,6 +464,26 @@ is restored automatically when the timer expires, and you are back on the rulese
 that was working. It is the standard `iptables-apply` idea, done as one nft
 transaction.
 
+### Per-rule logging and the live log
+
+Press `l` on a rule to mark it for logging. nft rules are immutable, so the rule
+is **replaced in place** — same handle, same position — with a `log` statement
+carrying a stable prefix, `tui:<chain> <verdict> `. The replacement is previewed
+like every other change, and rebuilt from the rule's own modelled match, so a
+rule the tool cannot hold in full is refused rather than rewritten from a
+rendering. Press `l` again to remove the log. A rule that logs carries a `LOG`
+marker in its row.
+
+Press `w` for the live log: a read-only, OPNsense-style view of the kernel
+firewall log, filtered to this tool's own prefix. Each logged packet appears with
+its time, direction, action, source, destination, port and prefix, newest at the
+bottom. The nftables `log` statement writes to the kernel log, which journald
+carries, so the view reads `journalctl --kernel --follow`; a machine without
+journald is told so plainly. The feed pauses with `space` and the retained lines
+are capped, so a firewall under a scan cannot grow it without bound.
+
+![The live firewall log](docs/screenshots/tui-firewall-nftables-live.png)
+
 ## What v0.1 can do
 
 **Every backend**
@@ -513,6 +535,13 @@ transaction.
   table, and say why when it will not. Delete by handle.
 - Stage changes and apply them as one atomic `nft -f` transaction, with an
   automatic connectivity-safe rollback if the apply is not kept in time.
+- Mark a rule to be logged with `l`: the rule is replaced in place, keeping its
+  handle and position, with a stable `log prefix "tui:<chain> <verdict> "` the
+  live view greps for. Toggle it off the same way.
+- Watch the logged rules fire in real time with `w`: a live view of the kernel
+  firewall log — time, direction, action, source, destination, port and the log
+  prefix — read from journald and filtered to the tool's own rules, pausable and
+  bounded so it never grows without limit.
 
 ## What v0.1 cannot do
 
@@ -525,7 +554,8 @@ transaction.
 - **A firewalld policy object is read-only-ish**: its entries are listed and can
   be added and removed, but its target and its ingress/egress zones are not
   editable here.
-- **No live log tail.**
+- **No live log tail on ufw or firewalld** — it is an nftables feature, since it
+  reads the kernel log the nftables `log` statement writes.
 - **No nftables rule editing or reordering**, and no set-element editing: a rule
   is changed by deleting it and adding the new one, and a named set is created or
   used, not edited member by member.

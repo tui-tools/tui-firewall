@@ -89,6 +89,50 @@ func (r Ruleset) DeleteRule(group string, rule firewall.Rule) (firewall.Change, 
 	return r.BuildDeleteRule(chain, rule)
 }
 
+// ToggleLog builds the log-toggle command for the selected row. The row the UI
+// hands back carries a handle, which is looked up in the chain it names so the
+// full modelled rule — not just the row's few columns — is what the replacement
+// is rebuilt from.
+func (r Ruleset) ToggleLog(group string, rule firewall.Rule) (firewall.Change, error) {
+	switch group {
+	case GroupAliases:
+		return firewall.Change{}, errorf(
+			"an alias does not log; logging is a rule statement, toggled on a " +
+				"rule in one of the chain views")
+	case GroupNAT:
+		return firewall.Change{}, errorf(
+			"logging is toggled on filter rules; a NAT rule's job is the " +
+				"translation, not the verdict")
+	}
+	chain, err := r.ChainForGroup(group)
+	if err != nil {
+		return firewall.Change{}, err
+	}
+	handle, err := strconv.Atoi(rule.ID)
+	if err != nil || handle <= 0 {
+		return firewall.Change{}, errorf(
+			"this rule has no handle (%q), so there is no safe way to name it to "+
+				"nft; re-read the ruleset with R", rule.ID)
+	}
+	target, ok := findRuleByHandle(chain, handle)
+	if !ok {
+		return firewall.Change{}, errorf(
+			"rule handle %d is no longer in chain %s; press R to re-read the "+
+				"ruleset", handle, chain.Name)
+	}
+	return r.BuildToggleLog(chain, target)
+}
+
+// findRuleByHandle returns the rule a chain holds under a handle.
+func findRuleByHandle(chain Chain, handle int) (Rule, bool) {
+	for _, rule := range chain.Rules {
+		if rule.Handle == handle {
+			return rule, true
+		}
+	}
+	return Rule{}, false
+}
+
 // SetPolicy builds the policy change for the chain a group shows.
 func (r Ruleset) SetPolicy(group string, policy firewall.Policy) (firewall.Change, error) {
 	chain, err := r.ChainForGroup(group)
