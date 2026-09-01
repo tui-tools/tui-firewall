@@ -35,9 +35,13 @@ type Real struct {
 
 	// mu guards ruleset, which is the state the command builders decide
 	// against: which chains exist, which of them have a policy, how many
-	// rules use each alias. It is replaced wholesale by Load.
+	// rules use each alias. It is replaced wholesale by Load. It also guards
+	// the lazily-built install runner below.
 	mu      sync.Mutex
 	ruleset Ruleset
+	// install runs install(1) for the Save action; built on first use.
+	install    *runner.Runner
+	installErr error
 }
 
 // Available reports whether nft is installed on this host.
@@ -104,9 +108,82 @@ func (r *Real) Ruleset() Ruleset {
 	return r.ruleset
 }
 
-// Run executes a previewed change.
+// Run executes a previewed change. Almost every command is an nft invocation;
+// the one exception is the Save action's `install`, which the dispatching
+// runner below routes to its own binary.
 func (r *Real) Run(ctx context.Context, change firewall.Change) (string, error) {
-	return firewall.RunChange(ctx, r.run, change)
+	return firewall.RunChange(ctx, dispatchRunner{r}, change)
+}
+
+// dispatchRunner routes each command of a change to the runner that owns its
+// binary. The nft runner resolves argv[0] to the nft path, so a command whose
+// argv[0] is another binary must not go through it; today that is only the
+// Save action's install(1).
+type dispatchRunner struct{ r *Real }
+
+// Preview renders the command the way the nft runner would; the privilege
+// prefix is the same for both binaries, so the text is too.
+func (d dispatchRunner) Preview(cmd firewall.Command) string {
+	return d.r.run.Preview(cmd)
+}
+
+// Run routes one command to its binary's runner.
+func (d dispatchRunner) Run(ctx context.Context, cmd firewall.Command) (string, error) {
+	if len(cmd.Argv) > 0 && cmd.Argv[0] == "install" {
+		ir, err := d.r.installRunner()
+		if err != nil {
+			return "", err
+		}
+		return ir.Run(ctx, cmd)
+	}
+	return d.r.run.Run(ctx, cmd)
+}
+
+// installRunner lazily builds the runner for install(1), which the Save action
+// uses to write the serialized table with the right owner and mode in one
+// step. It is built on first use rather than at startup so a machine without
+// it — none in practice; install ships with coreutils — still gets every other
+// feature.
+func (r *Real) installRunner() (*runner.Runner, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.install != nil || r.installErr != nil {
+		return r.install, r.installErr
+	}
+	r.install, r.installErr = runner.New(runner.Options{
+		Bin:         "install",
+		SearchPaths: []string{"/usr/bin/install", "/bin/install"},
+		SudoPrefix:  r.sudoPrefix,
+		InstallHint: "install(1) ships with coreutils",
+	})
+	return r.install, r.installErr
+}
+
+// SnapshotOwnTable serialises the table this tool owns as nft's own text,
+// which is what the Save action writes to disk. Like the staging snapshot it
+// is the human listing, not the JSON: the text is a valid nft script, so the
+// saved file loads straight back with `nft -f`.
+func (r *Real) SnapshotOwnTable(ctx context.Context) (string, error) {
+	argv := append([]string{"nft", "list", "table"}, OwnTable.Args()...)
+	return r.run.Read(ctx, argv...)
+}
+
+// RuleSpecFor reads the selected row back into the spec the edit form opens
+// pre-filled with.
+func (r *Real) RuleSpecFor(group string, rule firewall.Rule) (firewall.RuleSpec, error) {
+	return r.Ruleset().SpecFor(group, rule)
+}
+
+// BuildEditRule replaces the selected row in place with the edited spec.
+func (r *Real) BuildEditRule(group string, rule firewall.Rule,
+	spec firewall.RuleSpec) (firewall.Change, error) {
+	return r.Ruleset().EditRule(group, rule, spec)
+}
+
+// BuildMoveRule moves the selected row one position up or down its chain.
+func (r *Real) BuildMoveRule(group string, rule firewall.Rule,
+	delta int) (firewall.Change, error) {
+	return r.Ruleset().MoveRule(group, rule, delta)
 }
 
 // SnapshotRuleset reads the whole ruleset as nft's own text, which is what the

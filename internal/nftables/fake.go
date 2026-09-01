@@ -32,6 +32,10 @@ type Fake struct {
 	Log []firewall.Command
 	// FailWith, when set, makes the next Run fail with this error.
 	FailWith error
+	// Saved and SavedPath record what the demo pretended to install with the
+	// Save action, so the tests can assert the file content round-tripped.
+	Saved     string
+	SavedPath string
 }
 
 // NewFake returns a Fake preloaded with the sample router ruleset.
@@ -123,6 +127,15 @@ func (f *Fake) runOne(cmd firewall.Command) (string, error) {
 	}
 	if len(args) == 0 {
 		return "", errorf("empty command")
+	}
+
+	// The Save action's install(1) is the one command that is not nft. The
+	// demo records what would have been written and touches no file.
+	if args[0] == "install" {
+		f.SavedPath = args[len(args)-1]
+		f.Saved = cmd.Stdin
+		return "demo: pretended to install " + f.SavedPath +
+			"; nothing on disk was written", nil
 	}
 
 	// `nft -f -` is the one batch form: the whole staged transaction, or a
@@ -398,9 +411,18 @@ func (f *Fake) addRule(operands []string, insert bool) (string, error) {
 	expr := rest[1:]
 
 	position := len(chain.Rules)
-	if insert && len(expr) >= 2 && expr[0] == "index" {
-		if n, err := strconv.Atoi(expr[1]); err == nil && n >= 0 && n <= position {
-			position = n
+	if len(expr) >= 2 && expr[0] == "index" {
+		// `insert … index N` writes before the rule now at N, and
+		// `add … index N` writes after it: the two forms the move builder
+		// uses, applied here the way nft applies them.
+		if n, err := strconv.Atoi(expr[1]); err == nil {
+			at := n
+			if !insert {
+				at = n + 1
+			}
+			if at >= 0 && at <= position {
+				position = at
+			}
 		}
 		expr = expr[2:]
 	}
@@ -827,6 +849,67 @@ func (f *Fake) BuildSetPolicy(group string, _ firewall.PolicyDirection,
 // BuildSetLogging always refuses, for the reason the real backend gives.
 func (f *Fake) BuildSetLogging(level string) (firewall.Change, error) {
 	return (&Real{}).BuildSetLogging(level)
+}
+
+// SnapshotOwnTable renders the in-memory table this tool owns as nft-style
+// text, which is what the Save action captures. The demo has no nft to print
+// the canonical form, so this is a faithful-enough rendering built from the
+// same parsed state the views show: the diff the Save preview draws in --demo
+// behaves like the real one without a byte leaving memory.
+func (f *Fake) SnapshotOwnTable(_ context.Context) (string, error) {
+	rs := f.Ruleset()
+	table, ok := rs.Table(OwnTable)
+	if !ok {
+		return "", errorf("there is no table %s to save; the actions menu "+
+			"offers to create it", OwnTable)
+	}
+	var b strings.Builder
+	b.WriteString("table " + OwnTable.String() + " {\n")
+	for _, set := range table.Sets {
+		b.WriteString("\tset " + set.Name + " {\n")
+		b.WriteString("\t\ttype " + set.Type + "\n")
+		if len(set.Flags) > 0 {
+			b.WriteString("\t\tflags " + strings.Join(set.Flags, ",") + "\n")
+		}
+		if set.Comment != "" {
+			b.WriteString("\t\tcomment \"" + set.Comment + "\"\n")
+		}
+		if len(set.Elements) > 0 {
+			b.WriteString("\t\telements = { " +
+				strings.Join(set.Elements, ", ") + " }\n")
+		}
+		b.WriteString("\t}\n")
+	}
+	for _, chain := range table.Chains {
+		b.WriteString("\tchain " + chain.Name + " {\n")
+		if chain.Base() {
+			b.WriteString("\t\t" + chain.Describe() + ";\n")
+		}
+		for _, rule := range chain.Rules {
+			b.WriteString("\t\t" + rule.Raw + "\n")
+		}
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("}\n")
+	return b.String(), nil
+}
+
+// RuleSpecFor reads the selected row back into the spec the edit form opens
+// pre-filled with.
+func (f *Fake) RuleSpecFor(group string, rule firewall.Rule) (firewall.RuleSpec, error) {
+	return f.Ruleset().SpecFor(group, rule)
+}
+
+// BuildEditRule replaces the selected row in place with the edited spec.
+func (f *Fake) BuildEditRule(group string, rule firewall.Rule,
+	spec firewall.RuleSpec) (firewall.Change, error) {
+	return f.Ruleset().EditRule(group, rule, spec)
+}
+
+// BuildMoveRule moves the selected row one position up or down its chain.
+func (f *Fake) BuildMoveRule(group string, rule firewall.Rule,
+	delta int) (firewall.Change, error) {
+	return f.Ruleset().MoveRule(group, rule, delta)
 }
 
 // Extras lists the nftables-specific actions.

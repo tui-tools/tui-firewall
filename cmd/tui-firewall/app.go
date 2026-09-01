@@ -99,6 +99,11 @@ type app struct {
 	// the applied batch is on screen before its keep window begins.
 	keepTickPending bool
 
+	// editing marks the open rule form as an edit: submitting replaces
+	// editTarget in place rather than adding a rule.
+	editing    bool
+	editTarget firewall.Rule
+
 	// live holds the live-log view: the open stream, the events retained, and
 	// whether the feed is paused. It is only reachable on the nftables backend
 	// and its demo, the ones that implement logStreamer.
@@ -271,6 +276,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.openApplyConfirm(msg.change)
+		return a, nil
+
+	case saveReadyMsg:
+		if msg.err != nil {
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, nil
+		}
+		a.openSaveConfirm(msg)
 		return a, nil
 
 	case logEventMsg:
@@ -452,6 +465,7 @@ func (a *app) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		a.mode = modeTable
+		a.editing = false
 		a.setStatus(ui.StatusInfo, "cancelled")
 		return a, nil
 	case "tab", "down":
@@ -484,18 +498,32 @@ func (a *app) handleForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, a.form.updateActive(msg)
 }
 
-// submitForm builds the add command from the form and opens the confirm dialog.
+// submitForm builds the add — or, in edit mode, the replace-in-place — command
+// from the form and opens the confirm dialog.
 func (a *app) submitForm() tea.Cmd {
 	spec, err := a.form.spec()
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
-	change, err := a.backend.BuildAddRule(a.group, spec)
+	var change firewall.Change
+	if a.editing {
+		editor, ok := a.backend.(ruleEditor)
+		if !ok {
+			// Unreachable: editing is only set by startEdit, which required the
+			// interface. Refusing beats replacing a rule with an add.
+			a.setStatus(ui.StatusError, "this backend cannot edit a rule in place")
+			return nil
+		}
+		change, err = editor.BuildEditRule(a.group, a.editTarget, spec)
+	} else {
+		change, err = a.backend.BuildAddRule(a.group, spec)
+	}
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
 	}
+	a.editing = false
 	a.stageOrConfirm(change.Description, "The firewall will be changed as follows.", change)
 	return nil
 }
@@ -534,6 +562,14 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.load()
 	case "a":
 		return a, a.startAdd()
+	case "E":
+		return a, a.startEdit()
+	case "K":
+		return a, a.confirmMove(-1)
+	case "J":
+		return a, a.confirmMove(1)
+	case "W":
+		return a, a.beginSave()
 	case "s":
 		a.toggleStaging()
 	case "S":
@@ -575,6 +611,7 @@ func (a *app) startAdd() tea.Cmd {
 		return a.openExtrasMenu()
 	default:
 		a.form = newRuleForm(a.caps, a.model.Services)
+		a.editing = false
 		a.mode = modeForm
 		return nil
 	}

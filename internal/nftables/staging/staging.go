@@ -322,6 +322,21 @@ func restoreCommand(snapshot string) firewall.Command {
 	}
 }
 
+// AtomicCommand renders one multi-command Change as a single `nft -f`
+// transaction: every command becomes a script line on standard input, and nft
+// applies all of them or none. It is how a change whose commands only make
+// sense together — a rule move is a copy plus a delete — runs atomically even
+// when staging mode is off. The script rides in Stdin, so a confirm dialog
+// shows it the way the staged apply shows its batch.
+func AtomicCommand(change firewall.Change) firewall.Command {
+	return firewall.Command{
+		Argv:        []string{"nft", "-f", "-"},
+		Description: change.Description,
+		Destructive: change.Destructive,
+		Stdin:       batchScript([]firewall.Change{change}),
+	}
+}
+
 // batchScript renders the staged changes as an nft script: one line per
 // command, the leading "nft" dropped because a script carries statements, not
 // invocations. The quoting the builders put in — around a comment, an interface
