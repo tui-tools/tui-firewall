@@ -38,40 +38,72 @@ func SavePath() (path, bootNote string) {
 		"the nftables service"
 }
 
-// BuildSave turns a captured `nft list table` listing into the install command
-// that writes it to disk. The listing travels on standard input rather than in
-// an argv word: a whole ruleset does not belong on a command line, and
-// `install -m 644 /dev/stdin <path>` writes it root-owned with the mode in one
-// step, no temp file left behind on failure.
+// BuildSave turns a captured `nft list table` listing and the tool's own spec
+// into the install command that writes them to disk, and returns the file
+// content beside it so the caller can diff what is there against what is
+// about to replace it.
+//
+// The content travels on standard input rather than in an argv word: a whole
+// ruleset does not belong on a command line, and `install -m 644 /dev/stdin
+// <path>` writes it root-owned with the mode in one step, no temp file left
+// behind on failure.
 //
 // The listing is nft's own text, which is a valid nft script — the same
 // property the staged rollback relies on — so the file `nft -f` loads on boot
-// is byte-for-byte what nft printed here.
-func BuildSave(listing, path, bootNote string) (firewall.Change, error) {
+// is byte-for-byte what nft printed here. The spec rides underneath it in
+// comment lines nft ignores, which is what keeps the file loadable by a plain
+// `nft -f` while still carrying the rules this tool has disabled.
+func BuildSave(listing string, spec Spec, path,
+	bootNote string) (firewall.Change, string, error) {
 	if err := checkSavePath(path); err != nil {
-		return firewall.Change{}, err
+		return firewall.Change{}, "", err
 	}
 	trimmed := strings.TrimSpace(listing)
 	if trimmed == "" {
-		return firewall.Change{}, errorf(
+		return firewall.Change{}, "", errorf(
 			"there is nothing to save: table %s does not exist yet; the "+
 				"actions menu offers to create it", OwnTable)
 	}
 	if !strings.Contains(trimmed, "table "+OwnTable.String()) {
-		return firewall.Change{}, errorf(
+		return firewall.Change{}, "", errorf(
 			"the capture does not look like table %s, so it is not written "+
 				"anywhere; re-read the ruleset with R and try again", OwnTable)
 	}
+	content, err := RenderSaveFile(trimmed, spec)
+	if err != nil {
+		return firewall.Change{}, "", err
+	}
 
+	note := bootNote
+	if !spec.Empty() {
+		note += "; the " + plural(spec.Len(), "disabled rule") +
+			" ride in comment lines nft ignores and this tool reads back"
+	}
 	return firewall.Change{
 		Description: "Save table " + OwnTable.String() + " to " + path,
-		Note:        bootNote,
+		Note:        note,
 		Commands: []firewall.Command{{
 			Argv:        []string{"install", "-m", "644", "/dev/stdin", path},
 			Description: "Install the serialized table as " + path,
-			Stdin:       trimmed + "\n",
+			Stdin:       content + "\n",
 		}},
-	}, nil
+	}, content + "\n", nil
+}
+
+// LoadSpec reads the disabled rules back out of the file the Save action
+// writes. A path that does not exist yet is a machine that has never saved,
+// which is an empty spec and not an error; anything else the reader cannot
+// make sense of is reported, because a spec that silently came back empty
+// would look exactly like a ruleset with nothing disabled.
+func LoadSpec(path string) (Spec, error) {
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the vetted save location (a package constant or the TUI_FIREWALL_SAVE_PATH override), read to recover the tool's own spec
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Spec{}, nil
+		}
+		return Spec{}, errorf("could not read the saved file %s: %v", path, err)
+	}
+	return ParseSpec(string(data))
 }
 
 // checkSavePath refuses a destination that could not have come from this

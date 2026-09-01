@@ -3,6 +3,7 @@ package nftables
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestSavePathByMachineKind(t *testing.T) {
 
 func TestBuildSave(t *testing.T) {
 	listing := "table inet tui {\n\tchain input {\n\t}\n}\n"
-	change, err := BuildSave(listing, savePathPlain, "loaded on boot")
+	change, _, err := BuildSave(listing, Spec{}, savePathPlain, "loaded on boot")
 	if err != nil {
 		t.Fatalf("BuildSave: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestBuildSaveRefusals(t *testing.T) {
 		{"path with a quote", good, `/etc/"save".nft`},
 	}
 	for _, tc := range cases {
-		if _, err := BuildSave(tc.listing, tc.path, ""); err == nil {
+		if _, _, err := BuildSave(tc.listing, Spec{}, tc.path, ""); err == nil {
 			t.Errorf("%s: should have been refused", tc.name)
 		}
 	}
@@ -113,7 +114,7 @@ func TestFakeSaveRoundTrip(t *testing.T) {
 			t.Errorf("the demo capture should carry %q:\n%s", want, listing)
 		}
 	}
-	change, err := BuildSave(listing, "/tmp/tui-firewall-test.nft", "note")
+	change, _, err := BuildSave(listing, Spec{}, "/tmp/tui-firewall-test.nft", "note")
 	if err != nil {
 		t.Fatalf("BuildSave: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestFakeSaveRoundTrip(t *testing.T) {
 // command: a change that mixed nft statements with a file write could not be
 // one atomic transaction, and the builder never produces such a mix.
 func TestSaveNeverJoinsAnNftBatch(t *testing.T) {
-	change, err := BuildSave("table inet tui {\n}\n", savePathPlain, "")
+	change, _, err := BuildSave("table inet tui {\n}\n", Spec{}, savePathPlain, "")
 	if err != nil {
 		t.Fatalf("BuildSave: %v", err)
 	}
@@ -143,4 +144,21 @@ func TestSaveNeverJoinsAnNftBatch(t *testing.T) {
 		t.Errorf("the save is exactly one install command, got %v", change.Commands)
 	}
 	var _ = firewall.Change{} // keep the import honest if assertions change
+}
+
+func TestUnifiedDiffBoundsTheTableItAllocates(t *testing.T) {
+	// The file at the save path is whatever is there; a big one must produce a
+	// diff rather than a quadratic allocation.
+	lines := make([]string, 4000)
+	for i := range lines {
+		lines[i] = "chain c" + strconv.Itoa(i) + " {}"
+	}
+	old := strings.Join(lines, "\n") + "\n"
+	out := UnifiedDiff(old, "table inet tui {\n}\n", "the file", "the capture")
+	if !strings.Contains(out, "-chain c0 {}") || !strings.Contains(out, "+table inet tui {") {
+		t.Errorf("a file past the bound diffs as a whole replacement:\n%s", out)
+	}
+	if strings.Contains(out, " chain c0 {}") {
+		t.Error("nothing should be reported as kept")
+	}
 }

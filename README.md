@@ -132,7 +132,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.2.2/tui-firewall_0.2.2_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.3.0/tui-firewall_0.3.0_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -309,6 +309,7 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `a` | Add a rule |
 | `E` | Edit the selected rule in place — same handle, same position (nftables) |
 | `K` / `J` | Move the selected rule up / down, as one atomic transaction (nftables) |
+| `D` | Disable or enable the selected rule, keeping its spec and its position (nftables) |
 | `d` | Delete the selected rule |
 | `e` | Enable or disable the firewall (ufw only) |
 | `r` | Reload the firewall |
@@ -467,7 +468,7 @@ is restored automatically when the timer expires, and you are back on the rulese
 that was working. It is the standard `iptables-apply` idea, done as one nft
 transaction.
 
-### Manage, not view: edit, move and save
+### Manage, not view: edit, move, disable and save
 
 The nftables backend does not stop at adding and deleting.
 
@@ -502,8 +503,36 @@ the usual include from `/etc/nftables.conf` (the dialog spells this out), and
 the running table: staged changes that were not applied yet are not in the
 file, and the dialog says so.
 
-Per-rule enable/disable is deliberately absent for now; `DESIGN.md` describes
-the persisted-spec format it is waiting for.
+**Disable.** Press `D` and the selected rule stops being enforced without
+being lost. nftables has no per-rule off switch — a rule is in the ruleset or
+it is not — so disabling is `nft delete rule … handle H` plus a record of the
+statement the rule was and the position it sat at. The rule stays in the table
+as a greyed-out row marked `disabled`, drawn from that record rather than from
+the kernel, and `D` again puts it back where it was with `nft insert rule …
+index N` (or appends it, if the chain has become shorter since). Only rules
+the tool holds in full can be disabled: the same refusals `E` makes, for the
+same reason.
+
+That record is written to the same file `W` saves, as comment lines `nft -f`
+ignores and this tool reads back:
+
+```
+# tui-firewall:spec v2
+table inet tui {
+	…
+}
+# tui-firewall:disabled {"index":2,"expr":["iifname","\"wan0\"","udp","dport","53","counter","drop"],…}
+```
+
+The live half of the file is still nft's own listing, byte for byte, so the
+boot path is exactly as it was — and a file written before this feature
+existed still loads, as a ruleset with nothing disabled. A ruleset with
+nothing disabled still *writes* that same v1 file, so nobody who does not use
+`D` sees the format at all. Disabling never joins a staged batch (the ruleset
+and the record have to change together), and it offers the save straight
+afterwards, because until it is saved the disabled rule lives only in the
+running process — which is what the `rules: 1 disabled, unsaved (W)` fact in
+the header is telling you. `DESIGN.md` has the format in full.
 
 ### Per-rule logging and the live log
 
@@ -583,10 +612,14 @@ are capped, so a firewall under a scan cannot grow it without bound.
 - Move a rule up and down with `K` and `J`, as one atomic `nft -f` transaction
   (a copy at the new position plus a delete of the old handle), staged into
   the batch when staging is on.
+- Disable a rule with `D` and enable it again with `D`: the rule leaves the
+  ruleset and stays on screen as a greyed-out row, rebuilt from the tool's own
+  persisted spec and put back at the position it had.
 - Save the tool's own table to disk with `W` — `nft list table inet tui`
   installed to `/etc/omarchy/router/tui-firewall.nft` on an Omarchy router,
   `/etc/nftables.d/tui-firewall.nft` elsewhere — with a unified diff against
-  the current file in the confirm dialog.
+  the current file in the confirm dialog. The disabled rules ride in the same
+  file as comments `nft -f` ignores, so it stays loadable on boot as it is.
 - Mark a rule to be logged with `l`: the rule is replaced in place, keeping its
   handle and position, with a stable `log prefix "tui:<chain> <verdict> "` the
   live view greps for. Toggle it off the same way.
@@ -612,8 +645,11 @@ are capped, so a firewall under a scan cannot grow it without bound.
 - **No nftables set-element editing**: a named set is created or used, and its
   members are added and removed one at a time from the actions menu, not
   edited in bulk.
-- **No per-rule enable/disable**: nftables has no disabled state, and faking
-  one honestly needs the persisted-spec format `DESIGN.md` describes.
+- **No per-rule enable/disable on ufw or firewalld**: it needs the tool's own
+  persisted spec, which only the nftables backend has. On nftables the spec is
+  not reconciled against a ruleset something else changed behind this tool's
+  back, so a rule enabled after another tool has reshuffled the chain lands at
+  the recorded index rather than beside the neighbour it had.
 - On ufw and firewalld, rules follow the backend's own order; the move keys
   are an nftables feature.
 

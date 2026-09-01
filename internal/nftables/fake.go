@@ -36,6 +36,13 @@ type Fake struct {
 	// Save action, so the tests can assert the file content round-tripped.
 	Saved     string
 	SavedPath string
+	// spec is the demo's own record of the rules it has disabled, and
+	// specDirty whether that record has been saved. The demo keeps them in
+	// memory exactly as the real backend keeps them across a session, so the
+	// disabled rows, the header fact and the save offer all behave in --demo
+	// the way they behave on a machine.
+	spec      Spec
+	specDirty bool
 }
 
 // NewFake returns a Fake preloaded with the sample router ruleset.
@@ -82,9 +89,55 @@ func (f *Fake) Capabilities() firewall.Capabilities { return capabilities }
 // prefix: the demo never escalates.
 func (f *Fake) Preview(change firewall.Change) string { return change.String() }
 
-// Load returns the in-memory ruleset as the UI model.
+// Load returns the in-memory ruleset as the UI model, with the rules the demo
+// has disabled drawn from its own spec — the same two sources the real
+// backend reads.
 func (f *Fake) Load(_ context.Context) (firewall.Model, error) {
-	return Model(f.Ruleset()), nil
+	return ModelWithSpec(f.Ruleset(), f.Spec()), nil
+}
+
+// Spec is the demo's record of the rules it has disabled.
+func (f *Fake) Spec() Spec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.spec
+}
+
+// SpecError is always nil: the demo never reads a file, so there is no saved
+// spec it could fail to understand.
+func (f *Fake) SpecError() error { return nil }
+
+// SpecDirty reports that a rule was disabled or enabled since the last save.
+func (f *Fake) SpecDirty() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.specDirty
+}
+
+// SpecSaved records that the spec now matches what was saved.
+func (f *Fake) SpecSaved() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.specDirty = false
+}
+
+// BuildToggleDisabled builds the change that disables the selected live rule,
+// or enables the selected disabled one.
+func (f *Fake) BuildToggleDisabled(group string,
+	rule firewall.Rule) (Toggle, error) {
+	ruleset, spec := f.Ruleset(), f.Spec()
+	if DisabledID(rule.ID) {
+		return ruleset.EnableRule(group, spec, rule)
+	}
+	return ruleset.DisableRule(group, rule)
+}
+
+// CommitToggleDisabled records a toggle once its command has run.
+func (f *Fake) CommitToggleDisabled(toggle Toggle) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.spec.Apply(toggle)
+	f.specDirty = true
 }
 
 // Ruleset returns a copy of the in-memory ruleset.

@@ -132,6 +132,11 @@ const (
 	// ExtraLog marks a rule that logs the packets it matches, so the row can
 	// carry a LOG tag. Its value is the log prefix when the rule has one.
 	ExtraLog = "log"
+	// ExtraDisabled marks a rule the backend holds but the firewall is not
+	// applying, so the row can be greyed out and marked. It is set by a
+	// backend that keeps its own record of a rule it took out of the running
+	// configuration — nftables, which has no disabled state of its own.
+	ExtraDisabled = "disabled"
 )
 
 // Rule is one entry of a Group, in backend-neutral terms.

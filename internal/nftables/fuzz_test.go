@@ -638,3 +638,114 @@ func mustReadSeedBytes(f *testing.F, name string) []byte {
 	}
 	return data
 }
+
+// FuzzParseSpec drives the reader of the tool's own saved file. The file is
+// root-owned and this tool wrote it, but "we wrote it" is a claim about the
+// last process to touch it, not about the bytes on disk — and what comes out
+// of it becomes an nft statement and a table row. The invariant is that
+// whatever parses is safe to hand to both: every statement word is one nft
+// operand or one closed quoted string, and nothing the table draws carries a
+// control character that would break the layout of the screen rather than the
+// cell.
+func FuzzParseSpec(f *testing.F) {
+	marker := specMarkerPrefix + SpecVersion + "\n"
+	valid := `{"index":1,"expr":["tcp","dport","22","counter","drop"],` +
+		`"rule":{"table":{"family":"inet","name":"tui"},"chain":"input",` +
+		`"handle":7,"index":0,"match":{"dport":"22"},"raw":"tcp dport 22"}}`
+	for _, seed := range []string{
+		"",
+		"table inet tui {\n}\n",
+		marker,
+		marker + disabledPrefix + valid,
+		marker + disabledPrefix + "{}",
+		marker + disabledPrefix + "null",
+		marker + disabledPrefix + "[]",
+		specMarkerPrefix + "v1\n",
+		disabledPrefix + valid,
+		marker + disabledPrefix + `{"index":0,"expr":["drop;flush ruleset"],` +
+			`"rule":{"table":{"family":"inet","name":"tui"},"chain":"c","handle":1,"match":{},"raw":""}}`,
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, content string) {
+		spec, err := ParseSpec(content)
+		if err != nil {
+			return
+		}
+		for _, entry := range spec.Disabled {
+			if len(entry.Expr) == 0 {
+				t.Fatalf("an accepted entry has nothing to put back: %+v", entry)
+			}
+			for _, word := range entry.Expr {
+				if err := checkSpecWord(word); err != nil {
+					t.Fatalf("an accepted statement word is not safe: %q (%v)", word, err)
+				}
+				if strings.ContainsAny(word, ";\n\r") {
+					t.Fatalf("an accepted statement word can end the statement: %q", word)
+				}
+			}
+			for _, name := range []string{
+				entry.Rule.Table.Family, entry.Rule.Table.Name, entry.Rule.Chain,
+			} {
+				if err := checkSpecName(name); err != nil {
+					t.Fatalf("an accepted name is not safe: %q (%v)", name, err)
+				}
+			}
+			// Everything the row draws has been through the one-line pass.
+			row := renderDisabled(entry, firewall.DirIn)
+			for _, cell := range []string{
+				string(row.Action), row.From, row.To, row.Ports, row.Proto,
+				row.Comment, row.Raw, row.Extra[firewall.ExtraDetail],
+				row.Extra[firewall.ExtraInIface], row.Extra[firewall.ExtraOutIface],
+			} {
+				if strings.ContainsAny(cell, "\n\r\t") {
+					t.Fatalf("a drawn cell carries a control character: %q", cell)
+				}
+			}
+			if !utf8.ValidString(row.Raw) {
+				t.Fatalf("a drawn cell is not valid UTF-8: %q", row.Raw)
+			}
+		}
+	})
+}
+
+// FuzzSaveFileRoundTrip asserts that anything this package writes, it reads
+// back: a disabled rule that survived the guards must survive the file, or a
+// save would quietly drop the rule it exists to preserve.
+func FuzzSaveFileRoundTrip(f *testing.F) {
+	f.Add("input", "10.0.0.0/8", "a comment", 3)
+	f.Add("forward", "@lan_hosts", "", 0)
+	f.Add("output", "", "quotes \" and ; semicolons", 1)
+
+	f.Fuzz(func(t *testing.T, chain, saddr, comment string, index int) {
+		if index < 0 {
+			index = -index
+		}
+		entry := DisabledRule{
+			Index: index,
+			Expr:  []string{"counter", "drop"},
+			Rule: Rule{
+				Table: OwnTable, Chain: chain, Handle: 3, Comment: comment,
+				Match: Match{Verdict: "drop", Saddr: saddr},
+			},
+		}
+		spec := Spec{Disabled: []DisabledRule{sanitizeDisabled(entry)}}
+		content, err := RenderSaveFile("table inet tui {\n}", spec)
+		if err != nil {
+			// A rule this package refuses to write is a rule it also refuses
+			// to build, which is the guard doing its job.
+			return
+		}
+		back, err := ParseSpec(content)
+		if err != nil {
+			t.Fatalf("what this package wrote, it must read: %v\n%s", err, content)
+		}
+		if back.Len() != 1 {
+			t.Fatalf("wrote 1 disabled rule, read %d back:\n%s", back.Len(), content)
+		}
+		if back.Disabled[0].Index != index {
+			t.Errorf("position %d came back as %d", index, back.Disabled[0].Index)
+		}
+	})
+}

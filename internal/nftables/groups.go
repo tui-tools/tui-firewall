@@ -26,15 +26,26 @@ func GroupName(chain Chain) string {
 	return chain.Table.String() + groupSeparator + chain.Name
 }
 
-// Model renders a whole ruleset as the picture the UI draws: one group per
-// chain worth showing, one for address translation, one for the aliases.
-func Model(rs Ruleset) firewall.Model {
+// Model renders a whole ruleset as the picture the UI draws, with nothing
+// disabled. It is the reading of a bare ruleset; a backend that also holds a
+// spec calls ModelWithSpec.
+func Model(rs Ruleset) firewall.Model { return ModelWithSpec(rs, Spec{}) }
+
+// ModelWithSpec renders a whole ruleset as the picture the UI draws: one group
+// per chain worth showing, one for address translation, one for the aliases.
+//
+// The disabled rules come from the spec rather than from the kernel, because
+// the kernel does not have them: they were deleted, and the spec is what says
+// they exist and where they belong. They are drawn in the chain they came out
+// of, at the position they go back to, so the list still reads as the order
+// the rules would be in.
+func ModelWithSpec(rs Ruleset, spec Spec) firewall.Model {
 	management := DetectManagement(rs)
 
 	model := firewall.Model{
 		Backend: "nftables",
 		Enabled: rs.Filtering(),
-		Groups:  append(chainGroups(rs), natGroup(rs), aliasGroup(rs)),
+		Groups:  append(chainGroups(rs, spec), natGroup(rs), aliasGroup(rs)),
 	}
 	if management.Managed() {
 		model.Warning = "read-only: " + management.Detail
@@ -54,7 +65,7 @@ func Model(rs Ruleset) firewall.Model {
 // chain that actually carries one. The empty scaffolding chains a manager
 // like firewalld leaves behind are left out; there are dozens of them and
 // none of them says anything.
-func chainGroups(rs Ruleset) []firewall.Group {
+func chainGroups(rs Ruleset, spec Spec) []firewall.Group {
 	var groups []firewall.Group
 	for _, table := range rs.Tables {
 		for _, chain := range table.Chains {
@@ -64,10 +75,14 @@ func chainGroups(rs Ruleset) []firewall.Group {
 				// verdict.
 				continue
 			}
-			if !chain.Base() && len(chain.Rules) == 0 {
+			// A regular chain with nothing in it says nothing — unless the
+			// reason it is empty is that this tool disabled its only rule,
+			// which is a fact the view has to keep showing.
+			if !chain.Base() && len(chain.Rules) == 0 &&
+				len(spec.InChain(chain.Table, chain.Name)) == 0 {
 				continue
 			}
-			groups = append(groups, chainGroup(rs, chain))
+			groups = append(groups, chainGroup(rs, chain, spec))
 		}
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
@@ -95,7 +110,7 @@ func hookRank(description string) int {
 }
 
 // chainGroup renders one chain as a group.
-func chainGroup(rs Ruleset, chain Chain) firewall.Group {
+func chainGroup(rs Ruleset, chain Chain, spec Spec) firewall.Group {
 	group := firewall.Group{
 		Name:        GroupName(chain),
 		Title:       chain.Name + " (" + chain.Table.String() + ")",
@@ -114,11 +129,47 @@ func chainGroup(rs Ruleset, chain Chain) firewall.Group {
 			strings.TrimPrefix(err.Error(), "nftables: ")
 	}
 	direction := directionOf(chain)
-	for _, rule := range chain.Rules {
+	disabled := spec.InChain(chain.Table, chain.Name)
+	for i, rule := range chain.Rules {
+		group.Rules, disabled = takeDisabledAt(group.Rules, disabled, i, direction)
 		group.Rules = append(group.Rules, renderRule(rule, direction))
 	}
+	// Whatever is left goes after the last live rule: an entry recorded past
+	// the end of a chain that has since become shorter still belongs in the
+	// view, and it is where enabling would put it back.
+	group.Rules, _ = takeDisabledAt(group.Rules, disabled, -1, direction)
 	return group
 }
+
+// takeDisabledAt moves every disabled entry that belongs before position i
+// into the row list. A negative position takes the rest, which is how the
+// entries recorded past the end of the chain land after the last live rule.
+func takeDisabledAt(rows []firewall.Rule, disabled []DisabledRule, at int,
+	direction firewall.Direction) ([]firewall.Rule, []DisabledRule) {
+	for len(disabled) > 0 && (at < 0 || disabled[0].Index <= at) {
+		rows = append(rows, renderDisabled(disabled[0], direction))
+		disabled = disabled[1:]
+	}
+	return rows, disabled
+}
+
+// renderDisabled maps a disabled rule onto the row the table shows: the same
+// columns a live rule gets, marked so the view can grey it out and say why it
+// is not doing anything.
+func renderDisabled(entry DisabledRule, direction firewall.Direction) firewall.Rule {
+	row := renderRule(entry.Rule, direction)
+	// A disabled rule is named by the spec, not by a handle nft no longer has,
+	// and it holds no position in the live chain's numbering.
+	row.ID = entry.ID()
+	row.Index = 0
+	row.Family = firewall.Family(entry.Family)
+	row.Extra[firewall.ExtraDisabled] = DisabledMarker
+	return row
+}
+
+// DisabledMarker is the value the disabled column carries, and the word the
+// row is read by.
+const DisabledMarker = "disabled"
 
 // policySlot maps a chain's hook onto the policy slot the header shows it in.
 func policySlot(chain Chain) firewall.PolicyDirection {
