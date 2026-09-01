@@ -50,20 +50,21 @@ func splitLines(text string) []string {
 	return strings.Split(strings.TrimRight(text, "\n"), "\n")
 }
 
-// maxDiffCells bounds the LCS table. A table's listing is a few hundred lines
-// and lands nowhere near it; a file at the save path that is not one — a log
-// somebody redirected there, a ruleset a hundred times this tool's own — would
+// maxDiffLines bounds each side of the comparison, and with it the LCS table
+// the diff allocates. A table's listing is a few hundred lines and lands
+// nowhere near it; a file at the save path that is not one — a log somebody
+// redirected there, a ruleset a hundred times this tool's own — would
 // otherwise ask for a table quadratic in its size before anything is drawn.
 // Past the bound the diff degrades to "the whole file is replaced", which is
 // what installing over it does anyway.
-const maxDiffCells = 4 << 20
+const maxDiffLines = 2000
 
 // diffOps walks the LCS table into the op list.
 func diffOps(oldLines, newLines []string) []diffOp {
-	n, m := len(oldLines), len(newLines)
-	if n < 0 || m < 0 || int64(n+1)*int64(m+1) > maxDiffCells {
-		return replaceAllOps(n, m)
+	if len(oldLines) > maxDiffLines || len(newLines) > maxDiffLines {
+		return replaceAllOps(oldLines, newLines)
 	}
+	n, m := len(oldLines), len(newLines)
 	// lcs[i][j] is the length of the longest common subsequence of
 	// oldLines[i:] and newLines[j:].
 	lcs := make([][]int, n+1)
@@ -108,12 +109,12 @@ func diffOps(oldLines, newLines []string) []diffOp {
 // replaceAllOps is the diff of two texts too big to compare line by line:
 // every old line goes, every new line arrives. It says the file is replaced,
 // which is true, rather than pretending to a precision it did not compute.
-func replaceAllOps(n, m int) []diffOp {
-	ops := make([]diffOp, 0, n+m)
-	for i := range n {
+func replaceAllOps(oldLines, newLines []string) []diffOp {
+	var ops []diffOp
+	for i := range oldLines {
 		ops = append(ops, diffOp{'-', i, -1})
 	}
-	for j := range m {
+	for j := range newLines {
 		ops = append(ops, diffOp{'+', -1, j})
 	}
 	return ops
