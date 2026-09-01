@@ -56,7 +56,7 @@ func TestSaveReportsAnUnchangedFile(t *testing.T) {
 		t.Fatalf("SnapshotOwnTable: %v", err)
 	}
 	content := strings.TrimSpace(listing) + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("seeding the save file: %v", err)
 	}
 

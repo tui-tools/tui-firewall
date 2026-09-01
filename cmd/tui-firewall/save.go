@@ -69,7 +69,7 @@ func (a *app) beginSave() tea.Cmd {
 // shows. A file that is missing or unreadable diffs as empty, which renders
 // every captured line as an addition — exactly what installing it would do.
 func currentSaveFile(path string) string {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the vetted save location (constant or the TUI_FIREWALL_SAVE_PATH override), read only to render the preview diff
 	if err != nil {
 		return ""
 	}
