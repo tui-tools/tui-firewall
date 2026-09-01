@@ -12,7 +12,10 @@ import (
 // is answered before anything is written.
 //
 // It is a plain longest-common-subsequence diff over lines. The files it
-// compares are one table's listing; quadratic is fine at that size.
+// compares are one table's listing, so quadratic is fine at that size — but
+// only one of the two is this tool's own capture. The other is whatever is at
+// the save path, and maxDiffCells is what keeps a file nobody here wrote from
+// turning that quadratic into an allocation this process does not survive.
 func UnifiedDiff(oldText, newText, oldLabel, newLabel string) string {
 	oldLines := splitLines(oldText)
 	newLines := splitLines(newText)
@@ -47,9 +50,20 @@ func splitLines(text string) []string {
 	return strings.Split(strings.TrimRight(text, "\n"), "\n")
 }
 
+// maxDiffCells bounds the LCS table. A table's listing is a few hundred lines
+// and lands nowhere near it; a file at the save path that is not one — a log
+// somebody redirected there, a ruleset a hundred times this tool's own — would
+// otherwise ask for a table quadratic in its size before anything is drawn.
+// Past the bound the diff degrades to "the whole file is replaced", which is
+// what installing over it does anyway.
+const maxDiffCells = 4 << 20
+
 // diffOps walks the LCS table into the op list.
 func diffOps(oldLines, newLines []string) []diffOp {
 	n, m := len(oldLines), len(newLines)
+	if n < 0 || m < 0 || int64(n+1)*int64(m+1) > maxDiffCells {
+		return replaceAllOps(n, m)
+	}
 	// lcs[i][j] is the length of the longest common subsequence of
 	// oldLines[i:] and newLines[j:].
 	lcs := make([][]int, n+1)
@@ -86,6 +100,20 @@ func diffOps(oldLines, newLines []string) []diffOp {
 		ops = append(ops, diffOp{'-', i, -1})
 	}
 	for ; j < m; j++ {
+		ops = append(ops, diffOp{'+', -1, j})
+	}
+	return ops
+}
+
+// replaceAllOps is the diff of two texts too big to compare line by line:
+// every old line goes, every new line arrives. It says the file is replaced,
+// which is true, rather than pretending to a precision it did not compute.
+func replaceAllOps(n, m int) []diffOp {
+	ops := make([]diffOp, 0, n+m)
+	for i := range n {
+		ops = append(ops, diffOp{'-', i, -1})
+	}
+	for j := range m {
 		ops = append(ops, diffOp{'+', -1, j})
 	}
 	return ops

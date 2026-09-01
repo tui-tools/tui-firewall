@@ -3,6 +3,7 @@ package nftables
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -143,4 +144,21 @@ func TestSaveNeverJoinsAnNftBatch(t *testing.T) {
 		t.Errorf("the save is exactly one install command, got %v", change.Commands)
 	}
 	var _ = firewall.Change{} // keep the import honest if assertions change
+}
+
+func TestUnifiedDiffBoundsTheTableItAllocates(t *testing.T) {
+	// The file at the save path is whatever is there; a big one must produce a
+	// diff rather than a quadratic allocation.
+	lines := make([]string, 4000)
+	for i := range lines {
+		lines[i] = "chain c" + strconv.Itoa(i) + " {}"
+	}
+	old := strings.Join(lines, "\n") + "\n"
+	out := UnifiedDiff(old, "table inet tui {\n}\n", "the file", "the capture")
+	if !strings.Contains(out, "-chain c0 {}") || !strings.Contains(out, "+table inet tui {") {
+		t.Errorf("a file past the bound diffs as a whole replacement:\n%s", out)
+	}
+	if strings.Contains(out, " chain c0 {}") {
+		t.Error("nothing should be reported as kept")
+	}
 }
