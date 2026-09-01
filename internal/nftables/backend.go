@@ -2,6 +2,7 @@ package nftables
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
@@ -39,6 +40,18 @@ type Real struct {
 	// the lazily-built install runner below.
 	mu      sync.Mutex
 	ruleset Ruleset
+	// spec is the tool's own record of the rules it has disabled, seeded from
+	// the saved file on the first Load and authoritative from then on: a rule
+	// disabled in this session is in it before anything is written to disk.
+	// specDirty says the two have drifted, which is what the header reports
+	// and what makes the Save offer after a disable more than a courtesy.
+	spec       Spec
+	specLoaded bool
+	specDirty  bool
+	// specErr is what went wrong reading the saved file, kept so the model can
+	// carry it as a warning and BuildSave can refuse to overwrite a file whose
+	// disabled rules were not understood.
+	specErr error
 	// install runs install(1) for the Save action; built on first use.
 	install    *runner.Runner
 	installErr error
@@ -96,8 +109,76 @@ func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 	}
 	r.mu.Lock()
 	r.ruleset = ruleset
+	// The spec is read once, from the file the Save action writes. Re-reading
+	// it on every Load would throw away a rule disabled in this session and
+	// not saved yet, which is the one thing the record exists to prevent.
+	if !r.specLoaded {
+		r.specLoaded = true
+		path, _ := SavePath()
+		r.spec, r.specErr = LoadSpec(path)
+	}
+	spec, specErr := r.spec, r.specErr
 	r.mu.Unlock()
-	return Model(ruleset), nil
+
+	model := ModelWithSpec(ruleset, spec)
+	if specErr != nil {
+		model.Warning = strings.TrimSpace(specErr.Error() + "  ·  " + model.Warning)
+	}
+	return model, nil
+}
+
+// Spec is the tool's own record of the rules it has disabled.
+func (r *Real) Spec() Spec {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.spec
+}
+
+// SpecError is what went wrong reading the saved file's spec, if anything. A
+// save is refused while it is set: overwriting a file whose disabled rules
+// this build could not read would delete them.
+func (r *Real) SpecError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.specErr
+}
+
+// SpecDirty reports that a rule was disabled or enabled since the last save,
+// so the record on screen is not yet the record on disk.
+func (r *Real) SpecDirty() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.specDirty
+}
+
+// SpecSaved records that the spec now matches the file on disk.
+func (r *Real) SpecSaved() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.specDirty = false
+}
+
+// BuildToggleDisabled builds the change that disables the selected live rule,
+// or enables the selected disabled one.
+func (r *Real) BuildToggleDisabled(group string,
+	rule firewall.Rule) (Toggle, error) {
+	ruleset, spec := r.Ruleset(), r.Spec()
+	if DisabledID(rule.ID) {
+		return ruleset.EnableRule(group, spec, rule)
+	}
+	return ruleset.DisableRule(group, rule)
+}
+
+// CommitToggleDisabled records a toggle once its command has actually run. It
+// is deliberately a second call rather than a side effect of the build: a
+// change that was previewed and then cancelled must leave the record exactly
+// as it was, and one that ran must be recorded from the very Toggle the
+// preview was built from rather than from a ruleset that has moved on since.
+func (r *Real) CommitToggleDisabled(toggle Toggle) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spec.Apply(toggle)
+	r.specDirty = true
 }
 
 // Ruleset returns the last ruleset that was read. --check uses it for the

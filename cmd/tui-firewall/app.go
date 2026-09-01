@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/compat"
 	"github.com/tui-tools/tui-kit/theme"
@@ -98,6 +99,17 @@ type app struct {
 	// keepTickPending asks the next load to start the rollback countdown, so
 	// the applied batch is on screen before its keep window begins.
 	keepTickPending bool
+
+	// pendingDisable is the toggle the change now at the confirm dialog
+	// applies, so a yes records it in the backend's spec. It is nil when the
+	// pending change is something else.
+	pendingDisable *nftables.Toggle
+	// pendingSave marks the change at the confirm dialog as the save, so a yes
+	// clears the "not written yet" state of the spec.
+	pendingSave bool
+	// saveOfferPending asks the next load to offer the save, so the disabled
+	// rule is on screen before the dialog that writes it to disk opens.
+	saveOfferPending bool
 
 	// editing marks the open rule form as an edit: submitting replaces
 	// editTarget in place rather than adding a rule.
@@ -230,6 +242,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyFilter()
 		// A batch that just applied starts its keep window now, with the applied
 		// ruleset already on screen, so the operator sees what they are keeping.
+		// A disable or enable that just applied offers the save that puts the
+		// tool's record of it on disk; until that happens the record lives only
+		// in this process.
+		if a.saveOfferPending {
+			a.saveOfferPending = false
+			return a, a.beginSave()
+		}
 		if a.keepTickPending && a.staging != nil {
 			a.keepTickPending = false
 			token := a.keepToken
@@ -243,7 +262,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ranMsg:
 		a.busy = false
 		wasApply := a.pendingApply
+		wasDisable := a.pendingDisable
+		wasSave := a.pendingSave
 		a.pendingApply = false
+		a.pendingDisable = nil
+		a.pendingSave = false
 		if msg.err != nil {
 			if wasApply {
 				// The batch was atomic: nft rejected it, so nothing changed and
@@ -265,6 +288,18 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
 		a.loading = true
+		if wasSave {
+			if saver, ok := a.backend.(tableSaver); ok {
+				saver.SpecSaved()
+			}
+		}
+		if wasDisable != nil {
+			// The rule is out of the ruleset (or back in it): record that now,
+			// and offer the save once the reload has put the new list on
+			// screen, so the file being written is the state the user can see.
+			a.commitToggleDisabled(*wasDisable)
+			a.saveOfferPending = true
+		}
 		return a, a.load()
 
 	case keepExpiredMsg:
@@ -347,8 +382,10 @@ func (a *app) handleConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	change, ok := a.confirm.Payload.(firewall.Change)
 	a.confirm = ui.Confirm{}
 	if !confirmed || !ok {
-		// A cancelled apply must not leave the next run looking like the batch.
+		// A cancelled change must not leave the next run looking like this one.
 		a.pendingApply = false
+		a.pendingDisable = nil
+		a.pendingSave = false
 		a.setStatus(ui.StatusInfo, "cancelled")
 		return a, nil
 	}
@@ -562,6 +599,8 @@ func (a *app) handleTableKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.load()
 	case "a":
 		return a, a.startAdd()
+	case "D":
+		return a, a.confirmToggleDisabled()
 	case "E":
 		return a, a.startEdit()
 	case "K":

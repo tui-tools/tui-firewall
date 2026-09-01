@@ -131,6 +131,12 @@ func (a *app) headerView() string {
 	if fact, ok := a.stagingFact(); ok {
 		facts = append(facts, fact)
 	}
+	// A rule this tool is holding disabled is not in the kernel at all, and one
+	// that is not written to the saved file yet is gone the moment the tool
+	// exits: both are facts about the machine, not about the last key press.
+	if fact, ok := a.disabledFact(); ok {
+		facts = append(facts, fact)
+	}
 
 	// The group selector only makes sense when the backend has more than one
 	// group; ufw always has exactly one.
@@ -168,6 +174,22 @@ func (a *app) stagingFact() (ui.Fact, bool) {
 			Value: fmt.Sprintf("%d pending", a.staging.Len())}, true
 	}
 	return ui.Fact{}, false
+}
+
+// disabledFact renders the header fact for the rules this tool is holding
+// disabled, and says when that record has not reached the saved file yet.
+func (a *app) disabledFact() (ui.Fact, bool) {
+	count, unsaved, ok := a.disabledCount()
+	if !ok {
+		return ui.Fact{}, false
+	}
+	value := strconv.Itoa(count) + " disabled"
+	if unsaved {
+		style := a.theme.Warn
+		return ui.Fact{Label: "rules", Value: value + ", unsaved (W)",
+			Style: &style}, true
+	}
+	return ui.Fact{Label: "rules", Value: value}, true
 }
 
 // loggingFactLabel names the logging fact the way the backend does, in the
@@ -242,10 +264,16 @@ func (a *app) rulesTable() string {
 	// for the note a backend attaches to a rule.
 	showKind := anyRule(a.visible, func(r firewall.Rule) bool { return r.Kind != "" })
 	showNote := anyRule(a.visible, func(r firewall.Rule) bool { return r.Note != "" })
+	// The state column appears only once something is switched off, so a
+	// firewall with nothing disabled keeps the width it had.
+	showState := anyRule(a.visible, disabledRow)
 
 	columns := []ui.Column{
 		{Title: "#", Width: 3},
 		{Title: "ACTION", Width: 6},
+	}
+	if showState {
+		columns = append(columns, ui.Column{Title: "STATE", Width: 8})
 	}
 	if showKind {
 		// Wide enough for "forward-port", the longest kind there is.
@@ -280,10 +308,11 @@ func (a *app) rulesTable() string {
 		row := []string{
 			ruleNumber(rule),
 			string(rule.Action),
-			second,
-			rule.To,
-			rule.From,
 		}
+		if showState {
+			row = append(row, disabledTag(rule))
+		}
+		row = append(row, second, rule.To, rule.From)
 		if showFamily {
 			row = append(row, familyLabel(rule.Family))
 		}
@@ -294,7 +323,7 @@ func (a *app) rulesTable() string {
 			row = append(row, rule.Comment)
 		}
 		rows = append(rows, row)
-		styles = append(styles, a.actionStyle(rule.Action))
+		styles = append(styles, a.ruleStyle(rule))
 	}
 
 	return ui.Table{
@@ -336,6 +365,18 @@ func familyLabel(f firewall.Family) string {
 	default:
 		return ""
 	}
+}
+
+// ruleStyle colors a rule row. A rule the firewall is not enforcing is dimmed
+// whatever its verdict: what matters about a disabled deny is that it is not
+// denying anything, and painting it in the danger colour would say the
+// opposite.
+func (a *app) ruleStyle(rule firewall.Rule) *lipgloss.Style {
+	if disabledRow(rule) {
+		style := a.theme.Row.Foreground(a.theme.Muted.GetForeground())
+		return &style
+	}
+	return a.actionStyle(rule.Action)
 }
 
 // actionStyle colors a row by its verdict, so a deny stands out from an allow.
@@ -402,6 +443,9 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 	if _, ok := a.backend.(ruleEditor); ok {
 		hints = append(hints, ui.KeyHint{Key: "E", Desc: "edit"})
 	}
+	if _, ok := a.backend.(ruleDisabler); ok {
+		hints = append(hints, ui.KeyHint{Key: "D", Desc: "disable"})
+	}
 	if _, ok := a.backend.(tableSaver); ok {
 		hints = append(hints, ui.KeyHint{Key: "W", Desc: "save"})
 	}
@@ -436,6 +480,7 @@ func helpKeys() []ui.KeyHint {
 		{Key: "a", Desc: "add a rule"},
 		{Key: "E", Desc: "edit the selected rule in place, keeping its handle and position (nftables)"},
 		{Key: "K / J", Desc: "move the selected rule up / down, as one atomic transaction (nftables)"},
+		{Key: "D", Desc: "disable or enable the selected rule, keeping its spec and position (nftables)"},
 		{Key: "d", Desc: "delete the selected rule"},
 		{Key: "e", Desc: "enable or disable the firewall (ufw)"},
 		{Key: "r", Desc: "reload the firewall"},

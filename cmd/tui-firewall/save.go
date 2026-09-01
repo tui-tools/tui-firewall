@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,11 +13,17 @@ import (
 )
 
 // tableSaver is the part of a backend the Save action needs: a serialisation
-// of the table this tool owns, as text `nft -f` can load back. The nftables
-// backend and its demo implement it; ufw and firewalld persist through their
-// own daemons and need no file from us.
+// of the table this tool owns, as text `nft -f` can load back, and the spec
+// that goes underneath it — the tool's own record of the rules it has
+// disabled, which the kernel cannot hold. The nftables backend and its demo
+// implement it; ufw and firewalld persist through their own daemons and need
+// no file from us.
 type tableSaver interface {
 	SnapshotOwnTable(ctx context.Context) (string, error)
+	Spec() nftables.Spec
+	SpecError() error
+	SpecDirty() bool
+	SpecSaved()
 }
 
 // saveReadyMsg carries the capture once it has been read off the machine: the
@@ -27,7 +32,10 @@ type saveReadyMsg struct {
 	change firewall.Change
 	diff   string
 	path   string
-	err    error
+	// spec is the record the capture was rendered with, so the confirm dialog
+	// can say how many disabled rules ride in the file.
+	spec nftables.Spec
+	err  error
 }
 
 // beginSave captures the owned table and prepares the install command. The
@@ -46,6 +54,15 @@ func (a *app) beginSave() tea.Cmd {
 			"an applied batch is waiting: press k to keep it before saving")
 		return nil
 	}
+	// A spec this build could not read is a file whose disabled rules are
+	// unknown, and writing over it would delete them. Refuse before capturing
+	// anything rather than at the confirm dialog.
+	if err := saver.SpecError(); err != nil {
+		a.setStatusf(ui.StatusError,
+			"%s — saving would overwrite it, so it is refused", err.Error())
+		return nil
+	}
+	spec := saver.Spec()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -55,13 +72,13 @@ func (a *app) beginSave() tea.Cmd {
 				"could not capture table %s to save it: %w", nftables.OwnTable, err)}
 		}
 		path, bootNote := nftables.SavePath()
-		change, err := nftables.BuildSave(listing, path, bootNote)
+		change, content, err := nftables.BuildSave(listing, spec, path, bootNote)
 		if err != nil {
 			return saveReadyMsg{err: err}
 		}
-		diff := nftables.UnifiedDiff(currentSaveFile(path),
-			strings.TrimSpace(listing)+"\n", path, "the capture to save")
-		return saveReadyMsg{change: change, diff: diff, path: path}
+		diff := nftables.UnifiedDiff(currentSaveFile(path), content, path,
+			"the capture to save")
+		return saveReadyMsg{change: change, diff: diff, path: path, spec: spec}
 	}
 }
 
@@ -86,6 +103,11 @@ func currentSaveFile(path string) string {
 // not in the file, and the body says so while staging is collecting.
 func (a *app) openSaveConfirm(msg saveReadyMsg) {
 	if msg.diff == "" {
+		// Nothing to write means the file already carries this ruleset and
+		// this spec, so the record on screen is the record on disk.
+		if saver, ok := a.backend.(tableSaver); ok {
+			saver.SpecSaved()
+		}
 		a.setStatusf(ui.StatusOK, "%s already matches the running table %s",
 			msg.path, nftables.OwnTable)
 		return
@@ -93,10 +115,15 @@ func (a *app) openSaveConfirm(msg saveReadyMsg) {
 	body := fmt.Sprintf(
 		"The running table %s is written to %s, replacing the file shown in "+
 			"the diff below.\n%s.", nftables.OwnTable, msg.path, msg.change.Note)
+	if !msg.spec.Empty() {
+		body += "\nThe file stays loadable by a plain nft -f: the disabled " +
+			"rules are comment lines nft ignores and this tool reads back."
+	}
 	if a.stagingOn && a.staging != nil && a.staging.Len() > 0 {
 		body += "\nStaged changes that were not applied yet are not part of " +
 			"this file."
 	}
+	a.pendingSave = true
 	a.mode = modeConfirm
 	a.confirm = ui.Confirm{
 		Title:   msg.change.Description,

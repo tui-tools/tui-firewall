@@ -78,6 +78,10 @@
       "action": "Delete the selected rule"
     },
     {
+      "key": "D",
+      "action": "Disable or enable the selected rule, keeping its spec and position (nftables)"
+    },
+    {
       "key": "e",
       "action": "Enable or disable the firewall (ufw)"
     },

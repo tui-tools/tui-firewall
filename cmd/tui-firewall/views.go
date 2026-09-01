@@ -198,8 +198,13 @@ func (a *app) flowRuleTable() string {
 	showLog := anyRule(a.visible, func(r firewall.Rule) bool {
 		return r.Extra[firewall.ExtraLog] != ""
 	})
+	// The state column appears only once something is switched off.
+	showState := anyRule(a.visible, disabledRow)
 	showCounter := a.width >= 96
 	showComment := a.width >= 110
+	if showState {
+		columns = append(columns, ui.Column{Title: "STATE", Width: 8})
+	}
 	if showProto {
 		columns = append(columns, ui.Column{Title: "PROTO", Width: 5})
 	}
@@ -231,6 +236,9 @@ func (a *app) flowRuleTable() string {
 			orDash(rule.Extra[firewall.ExtraInIface]),
 			orDash(rule.Extra[firewall.ExtraOutIface]),
 		}
+		if showState {
+			row = append(row, disabledTag(rule))
+		}
 		if showProto {
 			row = append(row, orDash(rule.Proto))
 		}
@@ -248,7 +256,7 @@ func (a *app) flowRuleTable() string {
 			row = append(row, ruleNote(rule))
 		}
 		rows = append(rows, row)
-		styles = append(styles, a.actionStyle(rule.Action))
+		styles = append(styles, a.ruleStyle(rule))
 	}
 	return a.renderTable(columns, rows, styles)
 }

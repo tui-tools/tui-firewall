@@ -70,6 +70,9 @@ func (r Ruleset) AddRule(group string, spec firewall.RuleSpec) (firewall.Change,
 // DeleteRule builds the delete command for the selected row, which is a rule
 // in a chain view, a rule in the NAT view, and an alias in the alias view.
 func (r Ruleset) DeleteRule(group string, rule firewall.Rule) (firewall.Change, error) {
+	if err := checkNotDisabled(rule.ID, "deleting"); err != nil {
+		return firewall.Change{}, err
+	}
 	switch group {
 	case GroupAliases:
 		table, err := parseTableID(rule.Note)
@@ -104,6 +107,9 @@ func (r Ruleset) ToggleLog(group string, rule firewall.Rule) (firewall.Change, e
 			"logging is toggled on filter rules; a NAT rule's job is the " +
 				"translation, not the verdict")
 	}
+	if err := checkNotDisabled(rule.ID, "toggling a log"); err != nil {
+		return firewall.Change{}, err
+	}
 	chain, err := r.ChainForGroup(group)
 	if err != nil {
 		return firewall.Change{}, err
@@ -128,6 +134,9 @@ func (r Ruleset) ToggleLog(group string, rule firewall.Rule) (firewall.Change, e
 // a rule by its handle. what names the action for the refusal messages.
 func (r Ruleset) chainRule(group string, row firewall.Rule,
 	what string) (Chain, Rule, error) {
+	if err := checkNotDisabled(row.ID, what); err != nil {
+		return Chain{}, Rule{}, err
+	}
 	switch group {
 	case GroupAliases:
 		return Chain{}, Rule{}, errorf(
@@ -186,6 +195,61 @@ func (r Ruleset) MoveRule(group string, row firewall.Rule,
 		return firewall.Change{}, err
 	}
 	return r.BuildMoveRule(chain, target, delta)
+}
+
+// DisableRule builds the delete for the selected row, plus the spec entry that
+// remembers it. The caller records the entry once the command has actually
+// run: a rule that is still in the ruleset is not disabled, whatever the spec
+// says.
+func (r Ruleset) DisableRule(group string, row firewall.Rule) (Toggle, error) {
+	chain, target, err := r.chainRule(group, row, "disabling")
+	if err != nil {
+		return Toggle{}, err
+	}
+	change, entry, err := r.BuildDisableRule(chain, target)
+	if err != nil {
+		return Toggle{}, err
+	}
+	return Toggle{Change: change, Entry: entry}, nil
+}
+
+// EnableRule builds the re-add for a rule the spec holds. The row the UI hands
+// back names the entry; the chain comes from the group on screen.
+func (r Ruleset) EnableRule(group string, spec Spec, row firewall.Rule) (Toggle, error) {
+	switch group {
+	case GroupAliases, GroupNAT:
+		return Toggle{}, errorf(
+			"enabling applies to filter rules; there is nothing disabled in " +
+				"this view")
+	}
+	chain, err := r.ChainForGroup(group)
+	if err != nil {
+		return Toggle{}, err
+	}
+	entry, ok := spec.Find(chain.Table, chain.Name, row.ID)
+	if !ok {
+		return Toggle{}, errorf(
+			"this tool has no disabled rule %q in chain %s; press R to "+
+				"re-read the ruleset", row.ID, chain.Name)
+	}
+	change, err := r.BuildEnableRule(chain, entry)
+	if err != nil {
+		return Toggle{}, err
+	}
+	return Toggle{Change: change, Entry: entry, Enabling: true}, nil
+}
+
+// checkNotDisabled refuses an action on a rule the firewall is not enforcing.
+// Every other action names its rule to nft by handle, and a disabled rule has
+// none: it is not in the ruleset. Saying so is better than the "this rule has
+// no handle" the handle parse would produce, which reads like a bug.
+func checkNotDisabled(id, what string) error {
+	if !DisabledID(id) {
+		return nil
+	}
+	return errorf(
+		"this rule is disabled, so it is not in the ruleset and %s does not "+
+			"apply to it; press D to enable it first", what)
 }
 
 // findRuleByHandle returns the rule a chain holds under a handle.
