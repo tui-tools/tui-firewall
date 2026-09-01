@@ -307,6 +307,8 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `pgup` / `pgdn` | Scroll a page |
 | `/` | Filter rules (matches any column; `esc` clears) |
 | `a` | Add a rule |
+| `E` | Edit the selected rule in place — same handle, same position (nftables) |
+| `K` / `J` | Move the selected rule up / down, as one atomic transaction (nftables) |
 | `d` | Delete the selected rule |
 | `e` | Enable or disable the firewall (ufw only) |
 | `r` | Reload the firewall |
@@ -314,6 +316,7 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `L` | Change the logging level (ufw) or the log-denied value (firewalld) |
 | `l` | Toggle logging on the selected rule (nftables) |
 | `w` | Watch the live firewall log of the logged rules (nftables) |
+| `W` | Save the tool's own table to a file loaded on boot, with a diff preview (nftables) |
 | `x` | Actions this backend offers beyond these keys |
 | `[` / `]` | Previous / next group — the firewalld zones and policy objects |
 | `R` | Re-read the firewall |
@@ -464,6 +467,44 @@ is restored automatically when the timer expires, and you are back on the rulese
 that was working. It is the standard `iptables-apply` idea, done as one nft
 transaction.
 
+### Manage, not view: edit, move and save
+
+The nftables backend does not stop at adding and deleting.
+
+**Edit in place.** Press `E` on a rule and the add-rule form opens pre-filled
+with the rule as it stands — interfaces, connection state, alias source,
+comment, all of it read back from the modelled match. Submitting builds one
+`nft replace rule … handle H`, the same replace-by-handle the log toggle uses,
+so the rule keeps its handle and its position. A rule the tool cannot hold in
+full — one with a match shown only as text, a NAT translation, a source-port
+match, a log statement with a level or an nflog group — is refused before the
+form opens, with the reason, rather than silently rewritten with half of
+itself missing.
+
+**Move.** `K` and `J` move a rule one position up or down. nftables has no
+move command, so a move is a copy written at the new position plus a delete of
+the old handle — two statements that only make sense together, which is why
+they always run as **one `nft -f` transaction**: wrapped as one when staging
+is off, or staged into the atomic batch when it is on. The rule is never
+duplicated or missing in between; the moved copy gets a fresh handle and a
+reset counter, and the preview says so.
+
+**Save.** Everything above changes the *running* ruleset, which a reboot
+throws away. Press `W` and the tool serialises its own table — `nft list
+table inet tui`, nft's own text, which is a valid nft script — and installs it
+with `install -m 644 /dev/stdin <path>`. The confirm dialog shows a **unified
+diff** against the file as it currently stands, so "what does saving change"
+is answered before a byte is written. On an Omarchy router the file is
+`/etc/omarchy/router/tui-firewall.nft`, which the router profile includes on
+boot; on any other machine it is `/etc/nftables.d/tui-firewall.nft`, loaded by
+the usual include from `/etc/nftables.conf` (the dialog spells this out), and
+`TUI_FIREWALL_SAVE_PATH` overrides the path for tests and labs. Saving writes
+the running table: staged changes that were not applied yet are not in the
+file, and the dialog says so.
+
+Per-rule enable/disable is deliberately absent for now; `DESIGN.md` describes
+the persisted-spec format it is waiting for.
+
 ### Per-rule logging and the live log
 
 Press `l` on a rule to mark it for logging. nft rules are immutable, so the rule
@@ -535,6 +576,17 @@ are capped, so a firewall under a scan cannot grow it without bound.
   table, and say why when it will not. Delete by handle.
 - Stage changes and apply them as one atomic `nft -f` transaction, with an
   automatic connectivity-safe rollback if the apply is not kept in time.
+- Edit a rule in place with `E`: the form opens pre-filled from the rule's own
+  modelled match and the submit is one `nft replace rule … handle H`, keeping
+  the handle and the position; a rule the model does not hold in full is
+  refused, never half-rewritten.
+- Move a rule up and down with `K` and `J`, as one atomic `nft -f` transaction
+  (a copy at the new position plus a delete of the old handle), staged into
+  the batch when staging is on.
+- Save the tool's own table to disk with `W` — `nft list table inet tui`
+  installed to `/etc/omarchy/router/tui-firewall.nft` on an Omarchy router,
+  `/etc/nftables.d/tui-firewall.nft` elsewhere — with a unified diff against
+  the current file in the confirm dialog.
 - Mark a rule to be logged with `l`: the rule is replaced in place, keeping its
   handle and position, with a stable `log prefix "tui:<chain> <verdict> "` the
   live view greps for. Toggle it off the same way.
@@ -545,7 +597,8 @@ are capped, so a firewall under a scan cannot grow it without bound.
 
 ## What v0.1 cannot do
 
-- **No rule editing.** Change a rule by deleting it and adding the new one.
+- **No rule editing on ufw or firewalld.** Change a rule by deleting it and
+  adding the new one; only the nftables backend edits in place with `E`.
 - **No `ufw` interface qualifiers** (`ufw allow in on eth0 …`): they are parsed
   and displayed, but the form cannot create them.
 - **No `ufw` application profile management** (only using existing profiles).
@@ -556,10 +609,13 @@ are capped, so a firewall under a scan cannot grow it without bound.
   editable here.
 - **No live log tail on ufw or firewalld** — it is an nftables feature, since it
   reads the kernel log the nftables `log` statement writes.
-- **No nftables rule editing or reordering**, and no set-element editing: a rule
-  is changed by deleting it and adding the new one, and a named set is created or
-  used, not edited member by member.
-- Rules follow the backend's own order; there is no reordering key.
+- **No nftables set-element editing**: a named set is created or used, and its
+  members are added and removed one at a time from the actions menu, not
+  edited in bulk.
+- **No per-rule enable/disable**: nftables has no disabled state, and faking
+  one honestly needs the persisted-spec format `DESIGN.md` describes.
+- On ufw and firewalld, rules follow the backend's own order; the move keys
+  are an nftables feature.
 
 ## Compatibility
 

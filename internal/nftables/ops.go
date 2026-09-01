@@ -123,6 +123,71 @@ func (r Ruleset) ToggleLog(group string, rule firewall.Rule) (firewall.Change, e
 	return r.BuildToggleLog(chain, target)
 }
 
+// chainRule resolves a group and a UI row down to the chain and the modelled
+// rule the row stands for: the shared front half of every action that rebuilds
+// a rule by its handle. what names the action for the refusal messages.
+func (r Ruleset) chainRule(group string, row firewall.Rule,
+	what string) (Chain, Rule, error) {
+	switch group {
+	case GroupAliases:
+		return Chain{}, Rule{}, errorf(
+			"an alias is not a rule; %s applies to a rule in one of the chain "+
+				"views", what)
+	case GroupNAT:
+		return Chain{}, Rule{}, errorf(
+			"%s applies to filter rules; a NAT rule is deleted and re-created "+
+				"from the actions menu", what)
+	}
+	chain, err := r.ChainForGroup(group)
+	if err != nil {
+		return Chain{}, Rule{}, err
+	}
+	handle, err := strconv.Atoi(row.ID)
+	if err != nil || handle <= 0 {
+		return Chain{}, Rule{}, errorf(
+			"this rule has no handle (%q), so there is no safe way to name it to "+
+				"nft; re-read the ruleset with R", row.ID)
+	}
+	target, ok := findRuleByHandle(chain, handle)
+	if !ok {
+		return Chain{}, Rule{}, errorf(
+			"rule handle %d is no longer in chain %s; press R to re-read the "+
+				"ruleset", handle, chain.Name)
+	}
+	return chain, target, nil
+}
+
+// EditRule builds the in-place replacement for the selected row from the spec
+// the edit form collected.
+func (r Ruleset) EditRule(group string, row firewall.Rule,
+	spec firewall.RuleSpec) (firewall.Change, error) {
+	chain, target, err := r.chainRule(group, row, "editing")
+	if err != nil {
+		return firewall.Change{}, err
+	}
+	return r.BuildEditRule(chain, target, spec)
+}
+
+// SpecFor reads the selected row back into the RuleSpec the edit form opens
+// pre-filled with.
+func (r Ruleset) SpecFor(group string, row firewall.Rule) (firewall.RuleSpec, error) {
+	chain, target, err := r.chainRule(group, row, "editing")
+	if err != nil {
+		return firewall.RuleSpec{}, err
+	}
+	return r.SpecForRule(chain, target)
+}
+
+// MoveRule builds the atomic up-or-down move for the selected row.
+func (r Ruleset) MoveRule(group string, row firewall.Rule,
+	delta int) (firewall.Change, error) {
+	chain, target, err := r.chainRule(group, row, "moving")
+	if err != nil {
+		return firewall.Change{}, err
+	}
+	return r.BuildMoveRule(chain, target, delta)
+}
+
 // findRuleByHandle returns the rule a chain holds under a handle.
 func findRuleByHandle(chain Chain, handle int) (Rule, bool) {
 	for _, rule := range chain.Rules {

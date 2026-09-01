@@ -127,7 +127,7 @@ func (r Ruleset) BuildAddRule(chain Chain, spec firewall.RuleSpec) (firewall.Cha
 	if err := r.checkMutable(chain); err != nil {
 		return firewall.Change{}, err
 	}
-	expr, err := r.ruleExpression(chain, spec)
+	expr, err := r.ruleExpression(chain, spec, "")
 	if err != nil {
 		return firewall.Change{}, err
 	}
@@ -151,8 +151,11 @@ func (r Ruleset) BuildAddRule(chain Chain, spec firewall.RuleSpec) (firewall.Cha
 
 // ruleExpression assembles the match and the statements of a new rule, in the
 // order nft prints them, so the preview reads like the rule the list will
-// show afterwards.
-func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, error) {
+// show afterwards. logPrefix, when not empty, is the prefix a logging rule
+// carries; the add-rule path passes none and logs bare, the edit path passes
+// the stable tui: prefix so an edited rule feeds the live log view.
+func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec,
+	logPrefix string) ([]string, error) {
 	verdict, err := verdictFor(spec.Action)
 	if err != nil {
 		return nil, err
@@ -226,6 +229,9 @@ func (r Ruleset) ruleExpression(chain Chain, spec firewall.RuleSpec) ([]string, 
 
 	if spec.Log {
 		expr = append(expr, "log")
+		if logPrefix != "" {
+			expr = append(expr, "prefix", quote(logPrefix))
+		}
 	}
 	// Every rule this backend writes carries a counter. It costs a few
 	// instructions per packet and it is the only way the rule list can answer
@@ -306,24 +312,62 @@ func (r Ruleset) BuildToggleLog(chain Chain, target Rule) (firewall.Change, erro
 // builder uses, so the replacement reads like the rule the list will show.
 func logToggleExpr(chain Chain, rule Rule) ([]string, error) {
 	m := rule.Match
+	if err := checkRebuildable(rule, "toggle its log"); err != nil {
+		return nil, err
+	}
+	return rebuildRuleExpr(chain, rule, !m.Log, logPrefix(chain.Name, m.Verdict))
+}
+
+// checkRebuildable is the guard every replace-by-handle rebuild shares: a rule
+// this package does not hold in full is refused rather than rewritten from a
+// rendering that might drop half of it. The action names what the caller was
+// about to do, so the refusal says which key was pressed.
+func checkRebuildable(rule Rule, action string) error {
+	m := rule.Match
 	if m.NAT != nil {
-		return nil, errorf(
-			"rule handle %d translates addresses; logging is toggled from the "+
-				"filter views, not the NAT one", rule.Handle)
+		return errorf(
+			"rule handle %d translates addresses; a NAT rule is deleted and "+
+				"re-created from the actions menu, not rebuilt in place",
+			rule.Handle)
 	}
 	if len(m.Unmodeled) > 0 {
-		return nil, errorf(
+		return errorf(
 			"rule handle %d carries a match this tool shows only as text (%s), so "+
-				"it cannot be rebuilt safely to toggle logging; edit it with nft "+
-				"directly", rule.Handle, strings.Join(m.Unmodeled, "; "))
+				"it cannot be rebuilt safely to %s; edit it with nft "+
+				"directly", rule.Handle, strings.Join(m.Unmodeled, "; "), action)
 	}
 	switch m.Verdict {
 	case "accept", "drop", "reject", "":
 	default:
-		return nil, errorf(
-			"per-rule logging is toggled on accept, drop and reject rules; rule "+
+		return errorf(
+			"only accept, drop and reject rules are rebuilt in place; rule "+
 				"handle %d is a %q rule", rule.Handle, m.Verdict)
 	}
+	return nil
+}
+
+// checkLogRoundTrip refuses a rule whose log statement carries arguments the
+// rebuild would drop: a level, or an nflog group. The log toggle does not need
+// it — toggling off removes the whole statement anyway — but an edit or a move
+// promises to keep the rule as it stands, and silently downgrading `nflog
+// group 5` to a plain kernel log would break whatever reads that group.
+func checkLogRoundTrip(rule Rule) error {
+	if rule.Match.LogGroup != "" || rule.Match.LogLevel != "" {
+		return errorf(
+			"rule handle %d logs with arguments this tool does not rebuild "+
+				"(a level or an nflog group), so it is not rewritten in place; "+
+				"edit it with nft directly", rule.Handle)
+	}
+	return nil
+}
+
+// rebuildRuleExpr renders a modelled rule's whole expression again, in the
+// order nft prints statements, with its log statement under the caller's
+// control: log says whether the rebuilt rule logs at all, and prefix is the
+// log prefix it carries (empty logs bare). The caller has already run
+// checkRebuildable.
+func rebuildRuleExpr(chain Chain, rule Rule, log bool, prefix string) ([]string, error) {
+	m := rule.Match
 
 	var expr []string
 	ifaces, err := interfaceSelectors(m.IIF, m.OIF)
@@ -347,10 +391,19 @@ func logToggleExpr(chain Chain, rule Rule) ([]string, error) {
 	}
 	expr = append(expr, l4...)
 
-	// The toggle: add the log statement when the rule does not log, drop it when
-	// it does. A rule that logs and nothing else keeps its bare counter.
-	if !m.Log {
-		expr = append(expr, "log", "prefix", quote(logPrefix(chain.Name, m.Verdict)))
+	// The log statement, under the caller's control: the toggle flips it, an
+	// edit or a move carries it over. A prefix rides in one quoted argv word,
+	// the way a comment does, so it must not smuggle a quote or a line break.
+	if log {
+		if strings.ContainsAny(prefix, "\n\r\"") {
+			return nil, errorf("rule handle %d has a log prefix nft would not "+
+				"round-trip", rule.Handle)
+		}
+		if prefix != "" {
+			expr = append(expr, "log", "prefix", quote(prefix))
+		} else {
+			expr = append(expr, "log")
+		}
 	}
 	expr = append(expr, "counter")
 
@@ -369,7 +422,7 @@ func logToggleExpr(chain Chain, rule Rule) ([]string, error) {
 	}
 	if len(expr) == 0 {
 		return nil, errorf(
-			"rule handle %d has no match this tool models, so toggling its log "+
+			"rule handle %d has no match this tool models, so rebuilding it "+
 				"would rewrite it as a match-everything rule", rule.Handle)
 	}
 	return expr, nil

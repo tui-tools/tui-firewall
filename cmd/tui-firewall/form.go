@@ -69,6 +69,8 @@ type ruleForm struct {
 	fields []formField
 	active int
 	caps   firewall.Capabilities
+	// title heads the dialog: "Add rule", or the edit flow's own heading.
+	title string
 }
 
 // newRuleForm builds the form for a backend and its service list. Which
@@ -166,9 +168,74 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 			kind: fieldText, input: text("empty appends to the end")})
 	}
 
-	f := ruleForm{fields: fields, caps: caps}
+	f := ruleForm{fields: fields, caps: caps, title: "Add rule"}
 	f.focusActive()
 	return f
+}
+
+// prefill writes a spec back into the form, which is how the edit flow opens
+// the form showing the rule as it stands. Field keys the form does not carry
+// (a backend without interfaces, say) are silently skipped: the spec came from
+// the same backend the form was built for, so nothing can actually be lost.
+func (f *ruleForm) prefill(spec firewall.RuleSpec) {
+	f.setChoice("action", string(spec.Action))
+	f.setChoice("service", spec.Service)
+	f.setText("ports", spec.Ports)
+	f.setChoice("proto", spec.Proto)
+	f.setText("from", spec.From)
+	f.setText("to", spec.To)
+	f.setText("icmptype", spec.ICMPType)
+	f.setText("iif", spec.InIface)
+	f.setText("oif", spec.OutIface)
+	f.setChoice("ctstate", strings.Join(spec.CTStates, ","))
+	f.setChoice("family", string(spec.Family))
+	if spec.Log {
+		f.setChoice("log", "yes")
+	} else {
+		f.setChoice("log", "no")
+	}
+	f.setText("comment", spec.Comment)
+	f.active = 0
+	f.focusActive()
+}
+
+// setText fills a text field by key.
+func (f *ruleForm) setText(key, value string) {
+	for i := range f.fields {
+		if f.fields[i].key == key && f.fields[i].kind == fieldText {
+			f.fields[i].input.SetValue(value)
+			return
+		}
+	}
+}
+
+// setChoice selects an option by key. An empty value selects the "(none)"
+// entry where the field has one. A value the option list does not carry — a
+// rule whose conntrack combination is not among the presets, say — is added to
+// the list and selected, so pre-filling never silently changes the rule.
+func (f *ruleForm) setChoice(key, value string) {
+	for i := range f.fields {
+		field := &f.fields[i]
+		if field.key != key || field.kind != fieldChoice {
+			continue
+		}
+		want := value
+		if want == "" {
+			want = noneOption
+		}
+		for j, option := range field.options {
+			if option == want {
+				field.choice = j
+				return
+			}
+		}
+		if value == "" {
+			return
+		}
+		field.options = append(field.options, value)
+		field.choice = len(field.options) - 1
+		return
+	}
 }
 
 // focusActive moves the text cursor to the active field.
@@ -295,7 +362,7 @@ func (f ruleForm) view(t theme.Theme, width, height int) string {
 	inner := min(max(width-8, 30), 72)
 	valueWidth := max(inner-labelWidth-6, 10)
 
-	lines := []string{t.Title.Render("Add rule"), ""}
+	lines := []string{t.Title.Render(f.title), ""}
 	for i, field := range f.fields {
 		label := t.Muted.Render(ui.Pad(field.label, labelWidth))
 		var value string

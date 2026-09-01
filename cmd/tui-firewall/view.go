@@ -397,6 +397,14 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 	if _, ok := a.backend.(logStreamer); ok {
 		hints = append(hints, ui.KeyHint{Key: "w", Desc: "live log"})
 	}
+	// Edit in place, move and save are offered only where the backend can do
+	// them: the nftables backend and its demo.
+	if _, ok := a.backend.(ruleEditor); ok {
+		hints = append(hints, ui.KeyHint{Key: "E", Desc: "edit"})
+	}
+	if _, ok := a.backend.(tableSaver); ok {
+		hints = append(hints, ui.KeyHint{Key: "W", Desc: "save"})
+	}
 	if len(a.backend.Extras(a.model, a.group)) > 0 {
 		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
 	}
@@ -426,6 +434,8 @@ func helpKeys() []ui.KeyHint {
 		{Key: "pgup/pgdn", Desc: "scroll a page"},
 		{Key: "/", Desc: "filter the rules (esc clears)"},
 		{Key: "a", Desc: "add a rule"},
+		{Key: "E", Desc: "edit the selected rule in place, keeping its handle and position (nftables)"},
+		{Key: "K / J", Desc: "move the selected rule up / down, as one atomic transaction (nftables)"},
 		{Key: "d", Desc: "delete the selected rule"},
 		{Key: "e", Desc: "enable or disable the firewall (ufw)"},
 		{Key: "r", Desc: "reload the firewall"},
@@ -440,6 +450,7 @@ func helpKeys() []ui.KeyHint {
 		{Key: "s", Desc: "toggle staging: collect changes instead of applying them (nftables)"},
 		{Key: "S", Desc: "review and apply the staged changes as one atomic transaction"},
 		{Key: "k", Desc: "keep an applied batch before its rollback timer fires"},
+		{Key: "W", Desc: "save the tool's own table to a file loaded on boot, with a diff preview (nftables)"},
 		{Key: "?", Desc: "this help"},
 		{Key: "q", Desc: "quit"},
 		{Key: "", Desc: ""},
