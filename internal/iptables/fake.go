@@ -195,9 +195,9 @@ func (f *Fake) apply(cmd firewall.Command) (string, error) {
 			return "run-parts: executing /usr/share/netfilter-persistent/plugins.d/15-ip4tables save\n" +
 				"run-parts: executing /usr/share/netfilter-persistent/plugins.d/25-ip6tables save", nil
 		}
-	case "service":
+	case iptablesInit, ip6tablesInit:
 		f.saveLocked()
-		return "iptables: Saving firewall rules: [  OK  ]", nil
+		return "iptables: Saving firewall rules to /etc/sysconfig/iptables: [  OK  ]", nil
 	}
 	return "", errorf("%s is not something the demo applies", cmd.String())
 }
