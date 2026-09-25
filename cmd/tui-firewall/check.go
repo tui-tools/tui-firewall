@@ -232,6 +232,9 @@ type iptablesFacts struct {
 	// and no catch-all, every port not refused above is open, which the
 	// openInput list alone would not say.
 	InputEnd map[string]string `json:"inputEnd"`
+	// InputRules counts the rules of INPUT per family, for a smoke test to
+	// compare with `iptables -S INPUT`.
+	InputRules map[string]int `json:"inputRules"`
 	// Persistence is the layer that restores the rules at boot and the drift
 	// between it and the running rules.
 	Persistence iptablesPersistence `json:"persistence"`
@@ -273,18 +276,19 @@ func collectIptablesFacts(backend firewall.Backend, model firewall.Model) *iptab
 	}
 	state := source.State()
 	facts := &iptablesFacts{
-		Version:   state.V4.Version,
-		Variant:   state.V4.Variant,
-		HasV6:     state.HasV6,
-		TablesV4:  len(state.V4.Tables),
-		TablesV6:  len(state.V6.Tables),
-		RulesV4:   countDumpRules(state.V4),
-		RulesV6:   countDumpRules(state.V6),
-		Warnings:  append(append([]string(nil), state.V4.Warnings...), state.V6.Warnings...),
-		Writable:  []string{},
-		Placement: map[string]string{},
-		OpenInput: map[string][]string{},
-		InputEnd:  map[string]string{},
+		Version:    state.V4.Version,
+		Variant:    state.V4.Variant,
+		HasV6:      state.HasV6,
+		TablesV4:   len(state.V4.Tables),
+		TablesV6:   len(state.V6.Tables),
+		RulesV4:    countDumpRules(state.V4),
+		RulesV6:    countDumpRules(state.V6),
+		Warnings:   append(append([]string(nil), state.V4.Warnings...), state.V6.Warnings...),
+		Writable:   []string{},
+		Placement:  map[string]string{},
+		OpenInput:  map[string][]string{},
+		InputEnd:   map[string]string{},
+		InputRules: map[string]int{},
 	}
 	for _, family := range iptables.Families() {
 		if family == iptables.V6 && !state.HasV6 {
@@ -294,6 +298,7 @@ func collectIptablesFacts(backend firewall.Backend, model firewall.Model) *iptab
 		if !ok {
 			continue
 		}
+		facts.InputRules[string(family)] = len(chain.Rules)
 		if at, rule := chain.CatchAll(); at > 0 {
 			facts.InputEnd[string(family)] = fmt.Sprintf("rule %d: %s", at,
 				rule.Match.TargetDetail())

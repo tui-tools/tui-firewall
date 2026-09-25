@@ -40,6 +40,18 @@
       "caption": "The firewalld actions menu: default zone, interfaces, masquerading, panic mode"
     },
     {
+      "path": "docs/screenshots/tui-firewall-iptables.png",
+      "caption": "A cloud image's INPUT chain under iptables: the catch-all REJECT last, and whether the running rules match the saved ones"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-iptables-add.png",
+      "caption": "A new rule inserted right before the catch-all REJECT, with the position and the reason in the preview"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-iptables-persist.png",
+      "caption": "Persisting with netfilter-persistent, previewed with the diff against rules.v4"
+    },
+    {
       "path": "docs/screenshots/tui-firewall-nftables.png",
       "caption": "The nftables input chain read straight from nft, with interfaces, connection state and per-rule counters"
     },
@@ -98,6 +110,10 @@
       "action": "Reload the firewall"
     },
     {
+      "key": "W",
+      "action": "Persist the running rules to the files restored at boot, with a diff preview (iptables); save the tool's own table (nftables)"
+    },
+    {
       "key": "x",
       "action": "Actions this backend offers beyond these keys"
     },
@@ -107,7 +123,7 @@
     },
     {
       "key": "v",
-      "action": "Pick a group: a firewalld zone, an nftables chain, NAT, aliases"
+      "action": "Pick a group: a firewalld zone, an nftables or iptables chain, NAT, aliases"
     },
     {
       "key": "[ / ]",
@@ -209,7 +225,9 @@
           "impact": "iptables-nft writes table ip filter and ip6 filter in nf_tables, and `iptables --version` says which variant is installed; the nftables backend treats those tables as read-only and points here"
         }
       ],
-      "tested": []
+      "tested": [
+        "1.8.10"
+      ]
     },
     {
       "name": "nftables",
@@ -298,7 +316,7 @@
     }
   },
   "security": {
-    "needs_sudo": "Reading the firewall and every change need root: `ufw status` and its add/delete/enable/reload/policy/logging, and every `firewall-cmd` read and write. Escalation goes through `sudo -n`, which never prompts; `--sudo \"\"` runs the command directly when you are already root.",
+    "needs_sudo": "Reading the firewall and every change need root: `ufw status` and its add/delete/enable/reload/policy/logging, every `firewall-cmd` read and write, and every `iptables-save`, `iptables`, `iptables-restore` and `netfilter-persistent save` (the saved rules.v4 is root-only too). Escalation goes through `sudo -n`, which never prompts; `--sudo \"\"` runs the command directly when you are already root.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,

@@ -65,7 +65,9 @@ tidy:
 ## Every backend is covered: the ufw demo for the shared screens, the firewalld
 ## one for the zone view and the actions menu that only it has, and the
 ## nftables one for the router screens — the flow rule list, the NAT and alias
-## views, the phase-2 add form and the staged atomic apply.
+## views, the phase-2 add form and the staged atomic apply — and the iptables
+## one for the cloud-image screens: the insert before the catch-all REJECT and
+## the persist diff.
 screenshots: build
 	python3 $(KIT)/tools/render-screenshots.py \
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
@@ -86,6 +88,12 @@ screenshots: build
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
 		--args="--demo=nftables" --settle 1.0 --budget 7.0 \
 		--screen nftables-live=w
+	python3 $(KIT)/tools/render-screenshots.py \
+		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
+		--args="--demo=iptables" \
+		--screen iptables= \
+		--screen 'iptables-add=a\t51820\t\rudp\r\t\r' \
+		--screen 'iptables-persist=a\t51820\t\rudp\r\t\ryW'
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

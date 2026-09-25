@@ -408,6 +408,15 @@ func describeRule(r firewall.Rule) string {
 		parts = append(parts, string(r.Direction))
 	}
 	parts = append(parts, r.To, "from", r.From)
+	// A backend whose destination column does not already carry the port
+	// (nftables, iptables) gets it spelled out, so the dialog names the rule.
+	if r.Ports != "" && !strings.Contains(r.To, r.Ports) {
+		port := "port " + r.Ports
+		if r.Proto != "" {
+			port += "/" + r.Proto
+		}
+		parts = append(parts, port)
+	}
 	if r.Comment != "" {
 		parts = append(parts, "#", r.Comment)
 	}

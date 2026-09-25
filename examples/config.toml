@@ -5,11 +5,13 @@
 # machine-wide one. TUI_FIREWALL_* environment variables override both, and
 # command line flags override everything.
 
-# Which firewall to drive: "auto", "ufw" or "firewalld".
+# Which firewall to drive: "auto", "ufw", "firewalld", "iptables" or "nftables".
 #
 # "auto" takes the installed backend whose service is running. If neither is
 # running it takes the one systemd would start at boot, and if neither is
-# enabled either, the first one installed (ufw before firewalld). Two firewalls
+# enabled either, the first one installed (ufw before firewalld). iptables is
+# chosen when a loader (netfilter-persistent, iptables-services) restores its
+# saved rules, and nftables when nothing else manages the machine. Two firewalls
 # on one machine is a misconfiguration rather than a supported setup, so name
 # the one you mean here when both are present.
 backend = "auto"

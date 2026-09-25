@@ -198,7 +198,7 @@ func (a *app) openApplyConfirm(change firewall.Change) {
 	body := fmt.Sprintf(
 		"These %d change(s) apply %s. "+
 			"After they apply you have %s to press k and keep them; if you lose "+
-			"access and do not, the snapshot below is restored automatically.",
+			"access and do not, the snapshot taken just before is restored automatically.",
 		a.staging.Len(), a.staging.Atomicity(), a.staging.Timeout().Round(time.Second))
 	a.pendingApply = true
 	a.mode = modeConfirm

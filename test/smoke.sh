@@ -74,6 +74,13 @@ if systemctl is-active --quiet firewalld 2>/dev/null; then
   backend=firewalld
 elif systemctl is-active --quiet ufw 2>/dev/null; then
   backend=ufw
+elif systemctl is-enabled --quiet netfilter-persistent 2>/dev/null ||
+  { [[ -x /usr/libexec/iptables/iptables.init ]] &&
+    systemctl is-enabled --quiet iptables 2>/dev/null; }; then
+  # A loader restores saved iptables rules at boot: the cloud-image shape
+  # (iptables-persistent, or iptables-services on RHEL) the iptables backend
+  # exists for, even with ufw installed beside it.
+  backend=iptables
 elif command -v ufw >/dev/null; then
   backend=ufw
 elif command -v firewall-cmd >/dev/null; then
@@ -223,6 +230,78 @@ case "$backend" in
       '"name":"ufw"'
     ;;
 
+  iptables)
+    # 1. Auto-detection lands on iptables, and says it was the loader.
+    check "check reads the iptables backend" \
+      "sudo -n $bin --check" \
+      '"backend": "iptables"'
+    check "and says why it chose it" \
+      "sudo -n $bin --check" \
+      '"selection": ".*restores /etc/(iptables/rules.v4|sysconfig/iptables)'
+
+    # 2. The variant is the one iptables reports about itself.
+    ipt_variant=$(iptables --version 2>/dev/null | sed -n 's/.*(\(.*\)).*/\1/p')
+    check "the variant matches \`iptables --version\` (${ipt_variant:-legacy})" \
+      "sudo -n $bin --check" \
+      "\"variant\": \"${ipt_variant:-legacy}\""
+
+    # 3. The INPUT rule count matches iptables' own listing: the parser test.
+    ipt_input=$(sudo -n iptables -S INPUT | grep -c '^-A INPUT' || true)
+    check "INPUT has $ipt_input rules, as \`iptables -S INPUT\` says" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      "\"inputRules\":\\{\"v4\":$ipt_input[,}]"
+
+    # 4. A new rule lands before the catch-all, and the report says where.
+    last=$(sudo -n iptables -S INPUT | tail -1)
+    if grep -qE -- '^-A INPUT -j (REJECT|DROP)' <<<"$last"; then
+      check "a new rule goes right before the catch-all (rule $ipt_input)" \
+        "sudo -n $bin --check" \
+        "\"ip filter / INPUT\": \"inserted at position $ipt_input of INPUT, right before rule $ipt_input"
+    fi
+
+    # 5. The persistence layer is found and the drift is known.
+    check "the persistence layer is reported" \
+      "sudo -n $bin --check" \
+      '"kind": "(netfilter-persistent|iptables-services)"'
+    check "and the saved rules could be compared" \
+      "sudo -n $bin --check" \
+      '"driftKnown": true'
+
+    # 6. A rule added behind the tool's back shows up as runtime-only drift,
+    #    and as an open port; removing it puts things back.
+    before_sync=$(sudo -n "$bin" --check | sed -n 's/.*"inSync": \(true\|false\).*/\1/p' | head -1)
+    catch=$ipt_input
+    if ! grep -qE -- '^-A INPUT -j (REJECT|DROP)' <<<"$last"; then
+      catch=$((ipt_input + 1))
+    fi
+    sudo -n iptables -I INPUT "$catch" -p udp -m udp --dport 65530 -j ACCEPT
+    check "a runtime-only rule is reported as not saved" \
+      "sudo -n $bin --check | tr -d '\\n'" \
+      '"runtimeOnly": \[[^]]*--dport 65530'
+    check "and its port as open" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"openInput":\{[^}]*"65530/udp"'
+    sudo -n iptables -D INPUT -p udp -m udp --dport 65530 -j ACCEPT
+    check "removing it restores the saved state (inSync: $before_sync)" \
+      "sudo -n $bin --check" \
+      "\"inSync\": $before_sync"
+
+    # 7. The nftables backend, forced, refuses the xtables tables.
+    if [[ ${ipt_variant:-} == nf_tables ]] && command -v nft >/dev/null; then
+      check "--backend nftables refuses ip filter / INPUT" \
+        "sudo -n $bin --backend nftables --check | tr -d ' \\n' | grep -o '\"writable\":\\[[^]]*\\]' | grep -c 'ipfilter/INPUT' || true" \
+        '^0$'
+      check "and names the iptables backend instead" \
+        "sudo -n $bin --backend nftables --check" \
+        'written by iptables-nft'
+    fi
+
+    # 8. The detector describes the backends it did not choose.
+    check "the report names every backend it knows" \
+      "sudo -n $bin --check | tr -d ' \\n'" \
+      '"name":"nftables"'
+    ;;
+
   nftables)
     # 1. Auto-detection lands on nftables, and the read path works. It only
     #    can if nothing else claims the ruleset, which the detail says.
@@ -279,7 +358,7 @@ case "$backend" in
     ;;
 esac
 
-# All three backends declare a version in the manifest, so whichever one this
+# Every backend declares a version in the manifest, so whichever one this
 # machine runs, the probed version is what gets recorded.
 if [[ $fail -eq 0 ]]; then
   record_compat "$(sudo -n "$bin" --check 2>/dev/null)" pass

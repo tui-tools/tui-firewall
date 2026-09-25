@@ -107,6 +107,9 @@ type app struct {
 	// pendingSave marks the change at the confirm dialog as the save, so a yes
 	// clears the "not written yet" state of the spec.
 	pendingSave bool
+	// persistHintPending asks the next load to add the "W persists" reminder
+	// to the status line when the running rules now differ from the saved ones.
+	persistHintPending bool
 	// saveOfferPending asks the next load to offer the save, so the disabled
 	// rule is on screen before the dialog that writes it to disk opens.
 	saveOfferPending bool
@@ -242,6 +245,12 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.loadFailed = false
 		a.model = msg.model
+		if a.persistHintPending {
+			a.persistHintPending = false
+			if p, ok := a.backend.(persister); ok && !p.PersistState().Drift.InSync {
+				a.status += "  ·  runtime only, W persists"
+			}
+		}
 		if _, ok := a.model.Group(a.group); !ok && len(a.model.Groups) > 0 {
 			a.group = a.model.Groups[0].Name
 		}
@@ -295,8 +304,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
 		// On a backend whose changes are runtime-only until persisted, the
 		// success line says so: the next boot restores the saved file.
+		// The reload decides: a change that put the rules back where the saved
+		// file has them (a rollback, a re-add) needs no reminder.
 		if _, ok := a.backend.(persister); ok && !wasSave {
-			a.status += "  ·  runtime only, W persists"
+			a.persistHintPending = true
 		}
 		a.loading = true
 		if wasSave {
