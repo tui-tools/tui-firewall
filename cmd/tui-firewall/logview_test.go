@@ -28,8 +28,8 @@ func TestToggleLogKeyPreviewsReplace(t *testing.T) {
 	if a.mode != modeConfirm {
 		t.Fatalf("l should preview a confirm, mode = %v", a.mode)
 	}
-	want := `replace rule inet tui input handle 14 iifname "wan0" tcp dport 22 ` +
-		`log prefix "tui:input drop " counter drop`
+	want := `replace rule inet tui input handle 14 iifname '"wan0"' tcp dport 22 ` +
+		`log prefix '"tui:input drop "' counter drop`
 	if !strings.Contains(a.confirm.Command, want) {
 		t.Errorf("the preview is not the log toggle:\n%s", a.confirm.Command)
 	}

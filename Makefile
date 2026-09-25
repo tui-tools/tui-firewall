@@ -67,7 +67,8 @@ tidy:
 ## nftables one for the router screens — the flow rule list, the NAT and alias
 ## views, the phase-2 add form and the staged atomic apply — and the iptables
 ## one for the cloud-image screens: the insert before the catch-all REJECT and
-## the persist diff.
+## the persist diff. The last run is the --open hand-off: the add form opened
+## prefilled (the rest of the comment is typed, since --args splits on spaces).
 screenshots: build
 	python3 $(KIT)/tools/render-screenshots.py \
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
@@ -94,6 +95,10 @@ screenshots: build
 		--screen iptables= \
 		--screen 'iptables-add=a\t51820\t\rudp\r\t\r' \
 		--screen 'iptables-persist=a\t51820\t\rudp\r\t\ryW'
+	python3 $(KIT)/tools/render-screenshots.py \
+		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
+		--args="--demo --open=19443/tcp,41641/udp --comment=headscale" \
+		--screen 'open= control (tailnet)'
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

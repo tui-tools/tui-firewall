@@ -136,3 +136,18 @@ func TestSplitAndQuoteArgs(t *testing.T) {
 		t.Errorf("JoinArgs = %s", got)
 	}
 }
+
+// TestCommentWithSpacesSurvivesRestore covers the comments the add form now
+// accepts: a space, parentheses and a single quote must come back as one word
+// from the dump line a staged batch or a save writes.
+func TestCommentWithSpacesSurvivesRestore(t *testing.T) {
+	argv := []string{"-A", "INPUT", "-p", "tcp", "--dport", "19443",
+		"-m", "comment", "--comment", "headscale control (tailnet) it's", "-j", "ACCEPT"}
+	got, err := SplitArgs(JoinArgs(argv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, "|") != strings.Join(argv, "|") {
+		t.Errorf("round trip = %q, want %q", got, argv)
+	}
+}

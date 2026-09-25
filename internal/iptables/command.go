@@ -264,10 +264,13 @@ func (s State) BuildSetPolicy(group string, policy firewall.Policy) (firewall.Ch
 // wildcard iptables allows at the end.
 var ifaceName = regexp.MustCompile(`^[A-Za-z0-9_.:@-]{1,15}\+?$`)
 
-// commentWord is what a comment may carry. It is one word on purpose: the
-// preview renders argv words joined by spaces, and a comment with a space in
-// it would read as two words there while running as one.
-var commentWord = regexp.MustCompile(`^[A-Za-z0-9_.:/@+,=-]{1,64}$`)
+// commentText is what a comment may carry: one printable line of at most 255
+// bytes, the comment match's own limit. Spaces and parentheses are fine now
+// that the preview shell-quotes every word, so it reads as one argument
+// exactly as it runs. A double quote and a backslash are still refused: the
+// staged batch and the saved file carry the comment through iptables-restore,
+// whose quoting of those two differs between releases.
+var commentText = regexp.MustCompile(`^[^\x00-\x1f\x7f"\\]{1,255}$`)
 
 // icmpTypeName is an ICMP type as iptables names it, or a number.
 var icmpTypeName = regexp.MustCompile(`^[a-z0-9-]{1,32}(/[0-9]{1,3})?$`)
@@ -376,9 +379,9 @@ func specArgs(family Family, chain string, spec firewall.RuleSpec) ([]string, er
 		args = append(args, "-m", "conntrack", "--ctstate", strings.Join(states, ","))
 	}
 	if comment := strings.TrimSpace(spec.Comment); comment != "" {
-		if !commentWord.MatchString(comment) {
-			return nil, errorf("a comment here is one word of letters, digits " +
-				"and ._:/@+,=- (no spaces), so the preview reads exactly as it runs")
+		if len(comment) > 255 || !commentText.MatchString(comment) {
+			return nil, errorf("a comment here is one line of at most 255 bytes " +
+				"without double quotes or backslashes")
 		}
 		args = append(args, "-m", "comment", "--comment", comment)
 	}
