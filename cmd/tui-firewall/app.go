@@ -107,6 +107,9 @@ type app struct {
 	// pendingSave marks the change at the confirm dialog as the save, so a yes
 	// clears the "not written yet" state of the spec.
 	pendingSave bool
+	// persistHintPending asks the next load to add the "W persists" reminder
+	// to the status line when the running rules now differ from the saved ones.
+	persistHintPending bool
 	// saveOfferPending asks the next load to offer the save, so the disabled
 	// rule is on screen before the dialog that writes it to disk opens.
 	saveOfferPending bool
@@ -171,11 +174,17 @@ func newApp(backend firewall.Backend, th theme.Theme,
 		a.caps.SupportsComments = false
 	}
 	// Staging is offered only where a rollback is possible: a backend that can
-	// snapshot its own ruleset. That is the nftables backend and its demo; ufw
-	// and firewalld apply through their own daemons and have no such snapshot.
+	// snapshot its own ruleset. That is the nftables backend, the iptables one
+	// and their demos; ufw and firewalld apply through their own daemons and
+	// have no such snapshot.
 	if snap, ok := backend.(snapshotter); ok {
 		a.snap = snap
 		a.staging = staging.New(0)
+		// A backend that stages in its own tooling says how; nftables is the
+		// default dialect.
+		if d, ok := backend.(stagingDialecter); ok {
+			a.staging = staging.NewWithDialect(0, d.StagingDialect())
+		}
 	}
 	if th.Warning != "" {
 		a.setStatus(ui.StatusWarn, th.Warning)
@@ -236,6 +245,12 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.loadFailed = false
 		a.model = msg.model
+		if a.persistHintPending {
+			a.persistHintPending = false
+			if p, ok := a.backend.(persister); ok && !p.PersistState().Drift.InSync {
+				a.status += "  ·  runtime only, W persists"
+			}
+		}
 		if _, ok := a.model.Group(a.group); !ok && len(a.model.Groups) > 0 {
 			a.group = a.model.Groups[0].Name
 		}
@@ -287,6 +302,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			summary = "done"
 		}
 		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
+		// On a backend whose changes are runtime-only until persisted, the
+		// success line says so: the next boot restores the saved file.
+		// The reload decides: a change that put the rules back where the saved
+		// file has them (a rollback, a re-add) needs no reminder.
+		if _, ok := a.backend.(persister); ok && !wasSave {
+			a.persistHintPending = true
+		}
 		a.loading = true
 		if wasSave {
 			if saver, ok := a.backend.(tableSaver); ok {
@@ -319,6 +341,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.openSaveConfirm(msg)
+		return a, nil
+
+	case persistReadyMsg:
+		if msg.err != nil {
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, nil
+		}
+		a.openPersistConfirm(msg)
 		return a, nil
 
 	case logEventMsg:

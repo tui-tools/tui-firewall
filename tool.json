@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "name": "tui-firewall",
   "binary": "tui-firewall",
-  "tagline": "ufw, firewalld and nftables, with every change previewed before it runs",
-  "description": "A terminal UI for the Linux firewall, driving **ufw**, **firewalld** and **nftables** directly. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or chain policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes.\n\nOn a machine neither ufw nor firewalld manages it reads `nft -j list ruleset` and drives nft itself: filter chains by hook, a NAT view for masquerading and port forwards, and named sets as aliases with the number of rules using each. It writes only to a base chain whose policy nft reported, or to its own table, and says why when it will not.\n\nRun `tui-firewall --demo` for an in-memory ufw, `--demo=firewalld` for firewalld, or `--demo=nftables` for a sample router ruleset: every key works, every command is built and previewed for real, and nothing touches your system.",
+  "tagline": "ufw, firewalld, iptables and nftables, every change previewed before it runs",
+  "description": "A terminal UI for the Linux firewall, driving **ufw**, **firewalld**, **iptables** and **nftables** directly. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or chain policies and the logging level.\n\nThe UI never builds a command line: the confirm dialog shows the backend's command values and hands the same ones to the runner, so what you read is what executes.\n\nOn a machine nothing else manages it drives nft itself: filter chains by hook, a NAT view, and named sets as aliases. It writes only where it safely can, and says why when it will not.\n\nOn a cloud image whose iptables rules are restored at boot by iptables-persistent or iptables-services, a new rule lands in front of the catch-all REJECT, and persisting is its own previewed step.\n\nRun `tui-firewall --demo` for an in-memory ufw, `--demo=firewalld` for firewalld, `--demo=iptables` for a cloud-image iptables, or `--demo=nftables` for a sample router ruleset: every command is built and previewed for real, and nothing touches your system.",
   "category": "firewall",
   "homepage": "https://github.com/tui-tools/tui-firewall",
   "repo": "https://github.com/tui-tools/tui-firewall",
@@ -38,6 +38,18 @@
     {
       "path": "docs/screenshots/tui-firewall-firewalld-actions.png",
       "caption": "The firewalld actions menu: default zone, interfaces, masquerading, panic mode"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-iptables.png",
+      "caption": "A cloud image's INPUT chain under iptables: the catch-all REJECT last, and whether the running rules match the saved ones"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-iptables-add.png",
+      "caption": "A new rule inserted right before the catch-all REJECT, with the position and the reason in the preview"
+    },
+    {
+      "path": "docs/screenshots/tui-firewall-iptables-persist.png",
+      "caption": "Persisting with netfilter-persistent, previewed with the diff against rules.v4"
     },
     {
       "path": "docs/screenshots/tui-firewall-nftables.png",
@@ -98,6 +110,10 @@
       "action": "Reload the firewall"
     },
     {
+      "key": "W",
+      "action": "Persist the running rules with a diff preview (iptables); save the tool's table (nftables)"
+    },
+    {
       "key": "x",
       "action": "Actions this backend offers beyond these keys"
     },
@@ -107,7 +123,7 @@
     },
     {
       "key": "v",
-      "action": "Pick a group: a firewalld zone, an nftables chain, NAT, aliases"
+      "action": "Pick a group: a firewalld zone, an nftables or iptables chain, NAT, aliases"
     },
     {
       "key": "[ / ]",
@@ -184,6 +200,33 @@
       ],
       "tested": [
         "2.4.4"
+      ]
+    },
+    {
+      "name": "iptables",
+      "binary": "iptables",
+      "versionCommand": [
+        "iptables",
+        "--version"
+      ],
+      "versionRegex": "iptables v([0-9][0-9.]*)",
+      "minimum": "1.6",
+      "searchPaths": [
+        "/usr/sbin/iptables",
+        "/sbin/iptables"
+      ],
+      "notes": [
+        {
+          "range": "<1.8",
+          "impact": "only the legacy xtables interface exists, so the rules live outside nf_tables and the nft ruleset cannot show them; the backend reads them through iptables-save and the selector asks the legacy tables directly"
+        },
+        {
+          "range": ">=1.8",
+          "impact": "iptables-nft writes table ip filter and ip6 filter in nf_tables, and `iptables --version` says which variant is installed; the nftables backend treats those tables as read-only and points here"
+        }
+      ],
+      "tested": [
+        "1.8.10"
       ]
     },
     {
@@ -273,7 +316,7 @@
     }
   },
   "security": {
-    "needs_sudo": "Reading the firewall and every change need root: `ufw status` and its add/delete/enable/reload/policy/logging, and every `firewall-cmd` read and write. Escalation goes through `sudo -n`, which never prompts; `--sudo \"\"` runs the command directly when you are already root.",
+    "needs_sudo": "Reading the firewall and every change need root: ufw, firewall-cmd, nft, iptables and their -save/-restore tools, and netfilter-persistent. Escalation goes through `sudo -n`, which never prompts; `--sudo \"\"` runs the command directly when you are already root.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,

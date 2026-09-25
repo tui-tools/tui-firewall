@@ -1,0 +1,11 @@
+# A pure-nft host that also runs docker: the firewall is the native table
+# below, and docker has written its own plumbing into table ip filter through
+# iptables-nft (see docker-nft.sh, which adds that half).
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy drop;
+		ct state established,related accept
+		iifname "lo" accept
+		tcp dport 22 accept
+	}
+}

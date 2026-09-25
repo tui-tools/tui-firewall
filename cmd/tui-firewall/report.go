@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tui-tools/tui-firewall/internal/backends"
+	"github.com/tui-tools/tui-firewall/internal/iptables"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/config"
@@ -83,6 +84,13 @@ func runReport(cfg config.Config, opts options, out io.Writer) error {
 			})
 		}
 	}
+	if backendName == backends.BackendIptables && !opts.demo.on {
+		if line := describeIptables(cfg); line != "" {
+			info.Extra = append(info.Extra, report.Field{
+				Key: "iptables", Value: line,
+			})
+		}
+	}
 	if selectError != "" {
 		info.Extra = append(info.Extra, report.Field{
 			Key: "backend error", Value: selectError,
@@ -136,6 +144,37 @@ func describeNftables(cfg config.Config) string {
 	// build have the atomic apply" is a question a bug report has to answer.
 	parts = append(parts, fmt.Sprintf("staging available (%.0fs keep window)",
 		staging.DefaultTimeout.Seconds()))
+	return strings.Join(parts, "; ")
+}
+
+// describeIptables reports what iptables says about itself and about the
+// persistence layer: the variant, the rule counts, and whether the running
+// rules match the saved ones. Like describeNftables it never fails; a read
+// that needs a privilege the reporter lacks is simply a line not carried.
+func describeIptables(cfg config.Config) string {
+	backend, err := iptables.NewReal(cfg.SudoPrefix())
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := backend.Load(ctx); err != nil {
+		return ""
+	}
+	state := backend.State()
+	parts := []string{fmt.Sprintf("iptables %s (%s), %d v4 rules, %d v6 rules",
+		state.V4.Version, state.V4.Variant, countDumpRules(state.V4),
+		countDumpRules(state.V6))}
+	p := state.Persistence
+	if p.Found() {
+		parts = append(parts, fmt.Sprintf("persisted by %s (enabled: %t), saved rules %s",
+			p.Layout.Kind, p.Layout.Enabled, p.Drift.Summary()))
+	} else {
+		parts = append(parts, "no persistence layer: rules are gone at reboot")
+	}
+	for _, w := range append(state.V4.Warnings, state.V6.Warnings...) {
+		parts = append(parts, "warning: "+w)
+	}
 	return strings.Join(parts, "; ")
 }
 

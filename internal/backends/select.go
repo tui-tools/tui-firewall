@@ -11,6 +11,7 @@ import (
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-firewall/internal/firewalld"
+	"github.com/tui-tools/tui-firewall/internal/iptables"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
 	"github.com/tui-tools/tui-kit/config"
@@ -28,11 +29,13 @@ const (
 	BackendUFW       = "ufw"
 	BackendFirewalld = "firewalld"
 	BackendNftables  = "nftables"
+	BackendIptables  = "iptables"
 )
 
 // Names lists every accepted value, for config validation and the flag help.
 func Names() []string {
-	return []string{BackendAuto, BackendUFW, BackendFirewalld, BackendNftables}
+	return []string{BackendAuto, BackendUFW, BackendFirewalld, BackendIptables,
+		BackendNftables}
 }
 
 // Selection is the backend that was chosen and the sentence explaining why.
@@ -103,18 +106,44 @@ var probes = map[string]Probe{
 		Active:    func() bool { return unitIs("is-active", "nftables") },
 		Enabled:   func() bool { return unitIs("is-enabled", "nftables") },
 	},
+	// iptables is "running" when its persistence layer is: the unit that
+	// restored the saved rules at boot (netfilter-persistent, or the iptables
+	// unit of iptables-services). iptables itself is on nearly every machine —
+	// ufw and docker both need it — so being installed says nothing, and only
+	// a loader that restores its rules makes it the firewall in charge.
+	BackendIptables: {
+		Installed: iptables.Available,
+		Active:    func() bool { return iptablesLayout().PersistenceActive() },
+		Enabled:   func() bool { return iptablesLayout().Enabled },
+	},
+}
+
+// iptablesLayout finds the iptables persistence layer. It is a variable so
+// tests can answer for a machine they are not running on.
+var iptablesLayout = iptables.DetectLayout
+
+// readLegacy reports whether the legacy iptables tables carry rules of the
+// operator's own. They live outside nf_tables, so the nft ruleset cannot show
+// them; it is asked only when iptables says it is the legacy variant. It is a
+// variable so tests can answer for a host they are not running on.
+var readLegacy = func(sudoPrefix []string) (int, bool) {
+	if iptables.Variant() != "legacy" {
+		return 0, false
+	}
+	return iptables.LegacyFiltering(sudoPrefix)
 }
 
 // preference is the order `auto` considers backends. nftables comes last on
 // purpose: it is the backend for a machine nothing else is managing, and a
 // machine that runs ufw or firewalld also has nft installed, because that is
-// what those two write through.
-var preference = []string{BackendUFW, BackendFirewalld, BackendNftables}
+// what those two write through. iptables comes after the two managers because
+// both of them drive it underneath.
+var preference = []string{BackendUFW, BackendFirewalld, BackendIptables, BackendNftables}
 
 // managers are the backends that own a ruleset rather than editing it in
 // place. Their presence in the ruleset is what makes nftables the wrong
 // answer on a machine that has one.
-var managers = []string{BackendUFW, BackendFirewalld}
+var managers = []string{BackendUFW, BackendFirewalld, BackendIptables}
 
 // unitIs asks systemd about a unit: `is-active` for running, `is-enabled` for
 // starting at boot. A host without systemd simply reports false, which only
@@ -147,8 +176,18 @@ func unitIs(verb, unit string) bool {
 // is loaded in the kernel says exactly that, and it is still the right answer
 // on a machine where the service was stopped but its rules are still there.
 var readManagement = func(sudoPrefix []string) (nftables.Management, bool) {
-	if !nftables.Available() {
+	ruleset, ok := readRuleset(sudoPrefix)
+	if !ok {
 		return nftables.Management{}, false
+	}
+	return nftables.DetectManagement(ruleset), true
+}
+
+// readRuleset reads and parses the loaded nft ruleset, bounded so a wedged nft
+// cannot hold the terminal before the UI is on screen.
+func readRuleset(sudoPrefix []string) (nftables.Ruleset, bool) {
+	if !nftables.Available() {
+		return nftables.Ruleset{}, false
 	}
 	run, err := runner.New(runner.Options{
 		Bin:         "nft",
@@ -159,17 +198,17 @@ var readManagement = func(sudoPrefix []string) (nftables.Management, bool) {
 		Timeout: 5 * time.Second,
 	})
 	if err != nil {
-		return nftables.Management{}, false
+		return nftables.Ruleset{}, false
 	}
 	out, err := run.Read(context.Background(), "nft", "-j", "list", "ruleset")
 	if err != nil {
-		return nftables.Management{}, false
+		return nftables.Ruleset{}, false
 	}
 	ruleset, err := nftables.ParseRuleset([]byte(out))
 	if err != nil {
-		return nftables.Management{}, false
+		return nftables.Ruleset{}, false
 	}
-	return nftables.DetectManagement(ruleset), true
+	return ruleset, true
 }
 
 // Select builds the backend named by cfg.Backend, and reports which one it
@@ -195,7 +234,7 @@ func Select(cfg config.Config) (firewall.Backend, error) {
 func Resolve(cfg config.Config) (Selection, error) {
 	name := cfg.String(KeyBackend, BackendAuto)
 	switch name {
-	case BackendUFW, BackendFirewalld, BackendNftables:
+	case BackendUFW, BackendFirewalld, BackendNftables, BackendIptables:
 		return Selection{
 			Name:   name,
 			Detail: "chosen by configuration, not by detection",
@@ -219,7 +258,7 @@ func resolveAuto(sudoPrefix []string) (Selection, error) {
 		if probe.Active() {
 			return Selection{
 				Name:   name,
-				Detail: "the " + name + " service is running on this machine",
+				Detail: activeDetail(name, sudoPrefix),
 			}, nil
 		}
 		if probe.Enabled() {
@@ -234,10 +273,11 @@ func resolveAuto(sudoPrefix []string) (Selection, error) {
 	if nftInstalled {
 		if management, ok := readManagement(sudoPrefix); ok && management.Managed() {
 			if contains(installed, management.Manager) {
-				return Selection{
-					Name:   management.Manager,
-					Detail: management.Detail,
-				}, nil
+				detail := management.Detail
+				if management.Manager == BackendIptables {
+					detail += nativeTablesNote(sudoPrefix)
+				}
+				return Selection{Name: management.Manager, Detail: detail}, nil
 			}
 			// The tables are there and the tool that wrote them is not:
 			// nftables can read them, and it will refuse to write to them.
@@ -250,12 +290,28 @@ func resolveAuto(sudoPrefix []string) (Selection, error) {
 		}
 	}
 
+	// A legacy iptables keeps its tables outside nf_tables, where the ruleset
+	// above cannot see them: ask it directly.
+	if contains(installed, BackendIptables) {
+		if rules, ok := readLegacy(sudoPrefix); ok {
+			return Selection{
+				Name: BackendIptables,
+				Detail: fmt.Sprintf("the legacy iptables filter table carries %d "+
+					"rule(s) of the operator's own, so iptables is the firewall "+
+					"in charge of this machine", rules),
+			}, nil
+		}
+	}
+
 	if len(enabled) > 0 {
-		return Selection{
-			Name: enabled[0],
-			Detail: "nothing is running, and systemd would start " +
-				enabled[0] + " at boot",
-		}, nil
+		detail := "nothing is running, and systemd would start " +
+			enabled[0] + " at boot"
+		if enabled[0] == BackendIptables {
+			layout := iptablesLayout()
+			detail = "nothing is running, and systemd would start " +
+				layout.Unit() + " at boot, which restores " + layout.V4Path
+		}
+		return Selection{Name: enabled[0], Detail: detail}, nil
 	}
 	if nftInstalled {
 		return Selection{
@@ -274,9 +330,55 @@ func resolveAuto(sudoPrefix []string) (Selection, error) {
 	return Selection{}, fmt.Errorf(
 		"no supported firewall found; install nftables " +
 			"(apt install nftables / dnf install nftables), ufw " +
-			"(apt install ufw / pacman -S ufw) or firewalld " +
-			"(dnf install firewalld), pick one with `backend = \"...\"` " +
-			"in ~/.config/tui-firewall/config.toml, or run with --demo")
+			"(apt install ufw / pacman -S ufw), firewalld " +
+			"(dnf install firewalld) or iptables-persistent " +
+			"(apt install iptables-persistent), pick one with " +
+			"`backend = \"...\"` in ~/.config/tui-firewall/config.toml, " +
+			"or run with --demo")
+}
+
+// activeDetail is the sentence for a backend whose service is running. For
+// iptables the service is the loader, and what it loads is what makes the
+// sentence worth reading; when the nft ruleset also carries native tables the
+// iptables backend cannot show, the sentence says so.
+func activeDetail(name string, sudoPrefix []string) string {
+	if name != BackendIptables {
+		return "the " + name + " service is running on this machine"
+	}
+	layout := iptablesLayout()
+	detail := layout.Unit() + " is enabled and restores " + layout.V4Path +
+		" at boot, so iptables is the firewall in charge of this machine"
+	if !layout.Enabled {
+		detail = layout.Unit() + " restored " + layout.V4Path +
+			" on this boot, so iptables is the firewall in charge of this machine"
+	}
+	return detail + nativeTablesNote(sudoPrefix)
+}
+
+// nativeTablesNote says when the nft ruleset also holds native tables beside
+// the xtables ones: both filter packets, and the iptables backend shows only
+// its own. It is empty when there are none, or nft is not there to ask.
+func nativeTablesNote(sudoPrefix []string) string {
+	native := readNativeTables(sudoPrefix)
+	if len(native) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(native))
+	for _, id := range native {
+		names = append(names, "table "+id.String())
+	}
+	return "; the nft ruleset also has " + strings.Join(names, ", ") +
+		", which this backend does not show (--backend nftables reads it)"
+}
+
+// readNativeTables lists the native nft tables of the loaded ruleset. It is a
+// variable so tests can answer for a host they are not running on.
+var readNativeTables = func(sudoPrefix []string) []nftables.TableID {
+	ruleset, ok := readRuleset(sudoPrefix)
+	if !ok {
+		return nil
+	}
+	return nftables.NativeTables(ruleset)
 }
 
 // contains reports whether a slice holds a value.
@@ -296,6 +398,8 @@ func build(name string, cfg config.Config) (firewall.Backend, error) {
 		return firewalld.New(cfg.SudoPrefix())
 	case BackendNftables:
 		return nftables.NewReal(cfg.SudoPrefix())
+	case BackendIptables:
+		return iptables.NewReal(cfg.SudoPrefix())
 	default:
 		return ufw.NewReal(cfg.SudoPrefix())
 	}

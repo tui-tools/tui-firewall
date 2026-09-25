@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tui-tools/tui-firewall/internal/iptables"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-kit/config"
 )
@@ -37,15 +38,31 @@ func stubProbes(t *testing.T, ufwState, firewalldState probeState) {
 func stubAllProbes(t *testing.T, ufwState, firewalldState, nftState probeState) {
 	t.Helper()
 	originalProbes, originalRead := probes, readManagement
-	t.Cleanup(func() { probes, readManagement = originalProbes, originalRead })
+	originalLegacy, originalNative, originalLayout := readLegacy, readNativeTables, iptablesLayout
+	t.Cleanup(func() {
+		probes, readManagement = originalProbes, originalRead
+		readLegacy, readNativeTables, iptablesLayout = originalLegacy, originalNative, originalLayout
+	})
 	probes = map[string]Probe{
 		BackendUFW:       fixedProbe(ufwState),
 		BackendFirewalld: fixedProbe(firewalldState),
+		BackendIptables:  fixedProbe(probeState{}),
 		BackendNftables:  fixedProbe(nftState),
 	}
 	readManagement = func([]string) (nftables.Management, bool) {
 		return nftables.Management{}, false
 	}
+	readLegacy = func([]string) (int, bool) { return 0, false }
+	readNativeTables = func([]string) []nftables.TableID { return nil }
+	iptablesLayout = func() iptables.Layout { return iptables.Layout{} }
+}
+
+// stubIptables makes the iptables detector report a state and a
+// persistence layout.
+func stubIptables(t *testing.T, state probeState, layout iptables.Layout) {
+	t.Helper()
+	probes[BackendIptables] = fixedProbe(state)
+	iptablesLayout = func() iptables.Layout { return layout }
 }
 
 // stubRuleset makes the detector see a ruleset managed by the named tool.
@@ -127,7 +144,7 @@ func TestResolveAutoWithoutAnyFirewall(t *testing.T) {
 
 func TestResolveUnknownBackend(t *testing.T) {
 	if _, err := Resolve(config.Config{
-		Values: map[string]string{KeyBackend: "iptables"},
+		Values: map[string]string{KeyBackend: "pf"},
 	}); err == nil {
 		t.Error("expected an error for an unknown backend")
 	}
@@ -204,6 +221,7 @@ func TestInspectSkipsProbingAnAbsentBackend(t *testing.T) {
 			Active:    func() bool { return true },
 			Enabled:   func() bool { return true },
 		},
+		BackendIptables: fixedProbe(probeState{}),
 		BackendNftables: fixedProbe(probeState{}),
 	}
 
@@ -327,5 +345,125 @@ func TestResolveNftablesByConfiguration(t *testing.T) {
 	}
 	if selection.Name != BackendNftables {
 		t.Errorf("Resolve = %q, want nftables", selection.Name)
+	}
+}
+
+// debianLayout is the persistence layer of an Ubuntu cloud image.
+var debianLayout = iptables.Layout{
+	Kind:    iptables.LayoutNetfilterPersistent,
+	V4Path:  "/etc/iptables/rules.v4",
+	V6Path:  "/etc/iptables/rules.v6",
+	Enabled: true,
+}
+
+func TestResolveAutoPicksIptablesWhenItsLoaderRan(t *testing.T) {
+	// The real case: an Ubuntu cloud image with iptables-persistent, ufw
+	// installed but inactive, and nft on the machine too. The loader that
+	// restored rules.v4 at boot is what makes iptables the firewall in charge.
+	stubAllProbes(t, probeState{installed: true}, probeState{},
+		probeState{installed: true})
+	stubIptables(t, probeState{installed: true, active: true, enabled: true},
+		debianLayout)
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendIptables {
+		t.Fatalf("Resolve = %q, want iptables", selection.Name)
+	}
+	for _, want := range []string{"netfilter-persistent", "/etc/iptables/rules.v4"} {
+		if !strings.Contains(selection.Detail, want) {
+			t.Errorf("detail %q should mention %q", selection.Detail, want)
+		}
+	}
+}
+
+func TestResolveAutoIptablesSaysWhenNativeTablesExistToo(t *testing.T) {
+	// A host with both: the iptables backend is chosen, and the sentence says
+	// there is a native nft table it will not show.
+	stubAllProbes(t, probeState{}, probeState{}, probeState{installed: true})
+	stubIptables(t, probeState{installed: true, active: true, enabled: true},
+		debianLayout)
+	readNativeTables = func([]string) []nftables.TableID {
+		return []nftables.TableID{{Family: "inet", Name: "filter"}}
+	}
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !strings.Contains(selection.Detail, "table inet filter") {
+		t.Errorf("detail %q should name the native table", selection.Detail)
+	}
+}
+
+func TestResolveAutoPicksIptablesFromTheRuleset(t *testing.T) {
+	// No loader at all, but the nft ruleset shows iptables-nft tables with
+	// rules of the operator's own: iptables is in charge, and the ruleset is
+	// the witness.
+	stubAllProbes(t, probeState{}, probeState{}, probeState{installed: true})
+	stubIptables(t, probeState{installed: true}, iptables.Layout{})
+	stubRuleset(t, nftables.Management{
+		Manager: nftables.ManagerIptables,
+		Detail:  "the ruleset's table ip filter is written by iptables-nft",
+	})
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendIptables {
+		t.Fatalf("Resolve = %q, want iptables", selection.Name)
+	}
+	if !strings.Contains(selection.Detail, "iptables-nft") {
+		t.Errorf("detail %q should say why", selection.Detail)
+	}
+}
+
+func TestResolveAutoPicksIptablesFromLegacyTables(t *testing.T) {
+	// A legacy iptables keeps its rules where nft cannot see them; the
+	// detector asks it directly.
+	stubAllProbes(t, probeState{}, probeState{}, probeState{installed: true})
+	stubIptables(t, probeState{installed: true}, iptables.Layout{})
+	readLegacy = func([]string) (int, bool) { return 3, true }
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendIptables || !strings.Contains(selection.Detail, "legacy") {
+		t.Errorf("Resolve = %+v, want iptables because of the legacy table", selection)
+	}
+}
+
+func TestResolveAutoKeepsNftablesWhenIptablesIsOnlyInstalled(t *testing.T) {
+	// iptables is on nearly every machine; installed alone, with no loader and
+	// no rules of its own, it must not take a pure-nft host away from nftables.
+	stubAllProbes(t, probeState{}, probeState{}, probeState{installed: true})
+	stubIptables(t, probeState{installed: true}, iptables.Layout{})
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendNftables {
+		t.Errorf("Resolve = %q, want nftables", selection.Name)
+	}
+}
+
+func TestResolveAutoRunningUfwBeatsIptables(t *testing.T) {
+	// ufw writes through iptables; when it is running, it is the firewall.
+	stubAllProbes(t, probeState{installed: true, active: true}, probeState{},
+		probeState{installed: true})
+	stubIptables(t, probeState{installed: true, active: true, enabled: true},
+		debianLayout)
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendUFW {
+		t.Errorf("Resolve = %q, want ufw", selection.Name)
 	}
 }

@@ -407,6 +407,9 @@ type Capabilities struct {
 	LogLevels  []string
 	// SupportsInsert reports whether RuleSpec.Position is honoured.
 	SupportsInsert bool
+	// InsertHint says where a rule goes when no position is given, for the
+	// form's placeholder; empty means it is appended to the end.
+	InsertHint string
 	// SupportsComments reports whether RuleSpec.Comment is honoured.
 	SupportsComments bool
 	// SupportsRouted reports whether RuleSpec.Routed is honoured.

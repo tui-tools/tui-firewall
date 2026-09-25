@@ -86,6 +86,10 @@ func (r Ruleset) checkMutable(chain Chain) error {
 		return nil
 	}
 	management := DetectManagement(r)
+	if table, ok := r.Table(chain.Table); ok && IsXtables(table) &&
+		management.Manager != ManagerUFW {
+		return xtablesRefusal(chain.Table)
+	}
 	if management.Owns(chain.Table) {
 		return errorf(
 			"table %s belongs to %s: a rule added here is lost the next time "+

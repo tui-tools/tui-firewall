@@ -111,9 +111,14 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 			kind: fieldChoice, options: directions,
 			help: "Leave empty to let the backend decide."})
 	}
+	// A backend with no named services (iptables) leaves the label empty and
+	// gets no field that could only ever offer "(none)".
+	if caps.ServiceLabel != "" {
+		fields = append(fields, formField{key: "service", label: caps.ServiceLabel,
+			kind: fieldChoice, options: serviceOptions,
+			help: "Replaces port and protocol."})
+	}
 	fields = append(fields, []formField{
-		{key: "service", label: caps.ServiceLabel, kind: fieldChoice,
-			options: serviceOptions, help: "Replaces port and protocol."},
 		{key: "ports", label: "Port(s)", kind: fieldText,
 			input: text("22, 80,443 or 2000:2100")},
 		{key: "proto", label: "Protocol", kind: fieldChoice, options: protos},
@@ -164,8 +169,12 @@ func newRuleForm(caps firewall.Capabilities, services []string) ruleForm {
 			help: "A forwarding rule (ufw route)."})
 	}
 	if caps.SupportsInsert {
+		hint := caps.InsertHint
+		if hint == "" {
+			hint = "empty appends to the end"
+		}
 		fields = append(fields, formField{key: "position", label: "Insert at",
-			kind: fieldText, input: text("empty appends to the end")})
+			kind: fieldText, input: text(hint)})
 	}
 
 	f := ruleForm{fields: fields, caps: caps, title: "Add rule"}

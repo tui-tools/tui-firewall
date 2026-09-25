@@ -8,15 +8,23 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-firewall/internal/nftables/staging"
 	"github.com/tui-tools/tui-kit/ui"
 )
 
-// snapshotter is the part of the nftables backend the staging flow needs beyond
-// the generic firewall.Backend: a read of the whole ruleset as text, which is
-// what the connectivity-safe rollback replays. Only the nftables backend and
-// its demo implement it, which is what gates the staging keys.
+// snapshotter is the part of a backend the staging flow needs beyond the
+// generic firewall.Backend: a read of the whole ruleset as text, which is what
+// the connectivity-safe rollback replays. The nftables and iptables backends
+// and their demos implement it, which is what gates the staging keys.
 type snapshotter interface {
 	SnapshotRuleset(ctx context.Context) (string, error)
+}
+
+// stagingDialecter is a snapshotter that applies and restores in its own
+// tooling rather than nft's: the iptables backend, whose batch is an
+// iptables-restore --noflush per family.
+type stagingDialecter interface {
+	StagingDialect() staging.Dialect
 }
 
 // keepExpiredMsg is the rollback timer firing: the operator did not confirm
@@ -58,8 +66,8 @@ func (a *app) stageOrConfirm(title, body string, change firewall.Change) {
 func (a *app) toggleStaging() {
 	if a.staging == nil {
 		a.setStatus(ui.StatusWarn,
-			"staging is only available on the nftables backend, which can "+
-				"snapshot its ruleset to roll a batch back")
+			"staging is only available on the nftables and iptables backends, "+
+				"which can snapshot their rules to roll a batch back")
 		return
 	}
 	if a.awaitingKeep {
@@ -175,11 +183,11 @@ func (a *app) beginApply() tea.Cmd {
 				"could not snapshot the ruleset to make the apply reversible: %w", err)}
 		}
 		session.Snapshot(ruleset)
-		cmd, err := session.Apply()
+		change, err := session.ApplyChange()
 		if err != nil {
 			return applyReadyMsg{err: err}
 		}
-		return applyReadyMsg{change: firewall.One(cmd)}
+		return applyReadyMsg{change: change}
 	}
 }
 
@@ -188,10 +196,10 @@ func (a *app) beginApply() tea.Cmd {
 // change so a yes arms the keep timer.
 func (a *app) openApplyConfirm(change firewall.Change) {
 	body := fmt.Sprintf(
-		"These %d change(s) apply as one nft transaction: all of them, or none. "+
+		"These %d change(s) apply %s. "+
 			"After they apply you have %s to press k and keep them; if you lose "+
-			"access and do not, the snapshot below is restored automatically.",
-		a.staging.Len(), a.staging.Timeout().Round(time.Second))
+			"access and do not, the snapshot taken just before is restored automatically.",
+		a.staging.Len(), a.staging.Atomicity(), a.staging.Timeout().Round(time.Second))
 	a.pendingApply = true
 	a.mode = modeConfirm
 	a.confirm = ui.Confirm{
@@ -248,7 +256,7 @@ func (a *app) keepExpired(token int) tea.Cmd {
 	if !a.awaitingKeep || token != a.keepToken {
 		return nil
 	}
-	cmd, err := a.staging.Rollback()
+	change, err := a.staging.RollbackChange()
 	if err != nil {
 		a.setStatus(ui.StatusError, err.Error())
 		return nil
@@ -258,5 +266,5 @@ func (a *app) keepExpired(token int) tea.Cmd {
 	a.busy = true
 	a.setStatus(ui.StatusWarn,
 		"no keep within the window — restoring the snapshot to protect access")
-	return a.run(firewall.One(cmd))
+	return a.run(change)
 }

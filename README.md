@@ -7,7 +7,7 @@
 > and keys may move without notice until 1.0. Pin versions, and report what
 > breaks.
 
-A terminal UI for the Linux firewall — **ufw**, **firewalld** and **nftables** —
+A terminal UI for the Linux firewall — **ufw**, **firewalld**, **iptables** and **nftables** —
 that shows the rules you actually have and **previews the exact command line of
 every change before running it**.
 
@@ -16,9 +16,10 @@ fills the gap on a server or a tiling desktop, in the
 [Omarchy](https://omarchy.org) visual style. It picks the backend your machine
 actually runs, and the screen is built from what that backend can do — one rule
 list and three default policies for ufw, one group per zone with its target for
-firewalld, and for a machine neither of them manages, the raw nftables ruleset
-read straight from `nft`: filter chains by hook, a NAT view, and named sets as
-aliases.
+firewalld, the iptables chains of a cloud image whose rules are restored at boot
+by iptables-persistent, and for a machine none of them manages, the raw nftables
+ruleset read straight from `nft`: filter chains by hook, a NAT view, and named
+sets as aliases.
 
 ![Rules table](docs/screenshots/tui-firewall-main.png)
 
@@ -189,12 +190,13 @@ you quit.
 ```sh
 tui-firewall --demo             # an in-memory ufw
 tui-firewall --demo=firewalld   # an in-memory firewalld
+tui-firewall --demo=iptables    # a cloud image: INPUT ends in a REJECT, docker chains
 tui-firewall --demo=nftables    # a sample router ruleset
 ```
 
 `--demo` runs against an in-memory sample firewall. Every key works, every
 command is built and previewed for real, and nothing touches your system. The
-three demos are the three real backends over fake output, not three skins: each
+four demos are the four real backends over fake output, not four skins: each
 one parses backend-shaped output with the same parser and builds its commands
 with the same builder. The nftables demo starts from a router ruleset — filter
 chains for input, forward and output, the two NAT chains, and the named sets the
@@ -214,11 +216,13 @@ is what executes.
 tui-firewall                      # drive the real firewall
 tui-firewall --demo               # sample ufw data, no privileges needed
 tui-firewall --demo=firewalld     # sample firewalld data
+tui-firewall --demo=iptables      # sample cloud-image iptables
 tui-firewall --demo=nftables      # sample router ruleset
 tui-firewall --check              # read the firewall, print JSON, exit
 tui-firewall --report             # print what a bug report needs, exit
 tui-firewall --backend ufw        # skip autodetection
 tui-firewall --backend firewalld
+tui-firewall --backend iptables
 tui-firewall --backend nftables
 tui-firewall --theme ~/mytheme/colors.toml
 tui-firewall --sudo ""            # run the firewall command directly (as root)
@@ -315,11 +319,12 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `d` | Delete the selected rule |
 | `e` | Enable or disable the firewall (ufw only) |
 | `r` | Reload the firewall |
-| `p` | Change a default policy (ufw) or a zone target (firewalld) |
+| `p` | Change a default policy (ufw), a zone target (firewalld) or a chain policy (iptables, nftables) |
 | `L` | Change the logging level (ufw) or the log-denied value (firewalld) |
 | `l` | Toggle logging on the selected rule (nftables) |
 | `w` | Watch the live firewall log of the logged rules (nftables) |
 | `W` | Save the tool's own table to a file loaded on boot, with a diff preview (nftables) |
+| `W` | Persist the running rules to the files restored at boot, with a diff preview (iptables) |
 | `x` | Actions this backend offers beyond these keys |
 | `[` / `]` | Previous / next group — the firewalld zones and policy objects |
 | `R` | Re-read the firewall |
@@ -394,6 +399,94 @@ The UI does not know what any of these mean: the backend describes them, the UI
 collects the answers and previews whatever comes back. That is the same reason
 `e` is absent on firewalld — starting and stopping a system service is
 `systemctl`'s job, and the tool says so instead of doing it quietly.
+
+## iptables
+
+![The iptables INPUT chain of a cloud image](docs/screenshots/tui-firewall-iptables.png)
+
+Many cloud images ship no ufw and no firewalld. Their firewall is a plain
+iptables ruleset, restored at boot by **iptables-persistent** (Debian, Ubuntu:
+`/etc/iptables/rules.v4` and `rules.v6`) or **iptables-services** (Fedora, RHEL:
+`/etc/sysconfig/iptables`), and the INPUT chain ends in a catch-all:
+
+```
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT
+-A INPUT -j REJECT --reject-with icmp-host-prohibited
+```
+
+On such a machine `tui-firewall` drives `iptables` and `ip6tables` directly. It
+reads the rules with `iptables-save -c` and `ip6tables-save -c` (both the
+`nf_tables` and the `legacy` variants), shows one view per chain and family,
+`INPUT (iptables)` beside `INPUT (ip6tables)`, and writes only to the built-in
+`INPUT`, `FORWARD` and `OUTPUT` chains of the filter table. The chains docker,
+tailscaled, kube-proxy or fail2ban create are shown and left alone, because
+those daemons rebuild them every time they start.
+
+### Where a new rule goes
+
+An appended allow after the catch-all never matches. So a new rule is inserted
+**in front of the catch-all REJECT or DROP**, and the preview says so:
+
+![Adding a rule before the catch-all](docs/screenshots/tui-firewall-iptables-add.png)
+
+```
+Insert a rule at position 5 of INPUT (iptables)
+inserted at position 5 of INPUT, right before rule 5 (-j REJECT --reject-with
+icmp-host-prohibited): that rule catches everything, so a rule appended after
+it would never match
+
+$ sudo -n iptables -I INPUT 5 -p udp -m udp --dport 51820 -j ACCEPT
+```
+
+A chain with no catch-all gets the rule at its end, where the policy decides
+what nothing matched. An explicit position in the form is honoured, unless it
+lands after the catch-all, which is refused with the reason. A rule is deleted
+by its **specification** (`iptables -D INPUT -p tcp ... -j ACCEPT`), not by its
+number, so a rule another daemon inserted in the meantime cannot shift the
+delete onto a neighbour.
+
+### Persisting is its own step
+
+A change applies to the running kernel, and the next boot restores the saved
+file. The header says which state you are in (`saved: in sync`, or
+`saved: differs: 1 line not saved (W)`), the status line repeats it after every
+change, and `W` persists, with the diff between the saved file and the running
+rules in the preview:
+
+![Persisting with a diff preview](docs/screenshots/tui-firewall-iptables-persist.png)
+
+The command is the persistence layer's own: `netfilter-persistent save` on
+Debian and Ubuntu, `service iptables save` and `service ip6tables save` on RHEL.
+The comparison covers the filter table and leaves out the chains other daemons
+rebuild, so a host where tailscaled added `ts-input` after the last save still
+reads as in sync.
+
+Staging (`s`, `S`, `k`) works here too: the batch applies through
+`iptables-restore --noflush`, all or nothing per address family, and if the
+keep window runs out the filter table is restored from a snapshot taken right
+before the apply.
+
+### Which backend is chosen, and why
+
+`auto` picks iptables when its loader is active or enabled
+(`netfilter-persistent`, or the `iptables` unit of iptables-services), when the
+nft ruleset shows iptables-nft filter tables carrying rules of the operator's
+own, or when the legacy iptables tables do. Docker's plumbing alone does not
+count: a pure-nft host running docker stays on nftables. A running ufw or
+firewalld always wins, since both of them drive iptables underneath. The
+selection line in the header, `--check` and `--report` says which of these it
+was, and names any native nft table the iptables backend does not show.
+
+The nftables backend, in turn, refuses to write into a table iptables-nft owns
+(`ip filter` with its upper-case chains and xtables matches): a native rule
+there can make `iptables-save` refuse the table, which breaks
+`netfilter-persistent save`, and is lost when the saved rules are restored at
+boot. The refusal points at `--backend iptables`.
+
+`--check` carries an `iptables` block: the variant, the writable chains and
+where a new rule would land in each, the ports INPUT accepts ahead of its
+catch-all (and any accept that sits after it and never matches), and the
+persistence layer with the drift between running and saved rules.
 
 ## nftables
 
@@ -592,6 +685,20 @@ are capped, so a firewall under a scan cannot grow it without bound.
   from the same guided form.
 - Zone target, log-denied value, reload, and the actions menu above.
 
+**iptables**
+
+- Read `iptables-save -c` and `ip6tables-save -c` (nf_tables or legacy) and show
+  INPUT, FORWARD and OUTPUT of both families, then every other chain that holds a
+  rule, read-only.
+- Insert a rule right before the chain's catch-all REJECT or DROP, with the
+  position and the reason in the preview; refuse a position after it. Delete by
+  specification.
+- Persist with `netfilter-persistent save` or `service iptables save`, previewed
+  with the diff against the saved files; report runtime-vs-saved drift in the
+  header, the status line and `--check`.
+- Stage changes and apply them through `iptables-restore --noflush`, with the
+  same keep-or-roll-back window as nftables.
+
 **nftables**
 
 - Read `nft -j list ruleset` and show every base and used regular chain, its
@@ -694,6 +801,20 @@ hidden; one below the minimum is marked as such and the tool still runs.
 | `==2.0.0` | `--permanent --list-all-zones` prints the same settings for every zone on this release (firewalld#1152), so the permanent half of the runtime/permanent comparison is not trustworthy; 2.0.1 fixed it |
 | `>=2.2` | firewalld removed the lockdown feature, so no lockdown state is shown |
 
+### iptables
+
+| | |
+| --- | --- |
+| Binary | `iptables` |
+| Version read with | `iptables --version` |
+| Minimum | 1.6 |
+| Tested | `1.8.10` |
+
+| Versions | What changes |
+| --- | --- |
+| `<1.8` | only the legacy xtables interface exists, so the rules live outside nf_tables and the nft ruleset cannot show them; the backend reads them through iptables-save and the selector asks the legacy tables directly |
+| `>=1.8` | iptables-nft writes table ip filter and ip6 filter in nf_tables, and `iptables --version` says which variant is installed; the nftables backend treats those tables as read-only and points here |
+
 ### nftables
 
 | | |
@@ -729,7 +850,7 @@ environment. Flags override everything. See
 [`examples/config.toml`](examples/config.toml).
 
 ```toml
-# Which firewall to drive: "auto", "ufw" or "firewalld".
+# Which firewall to drive: "auto", "ufw", "firewalld", "iptables" or "nftables".
 backend = "auto"
 
 # Privilege escalation prefix; "" runs the command directly.
@@ -744,8 +865,10 @@ service is running. If neither is running it takes the one systemd would start
 at boot (`systemctl is-enabled`), and if neither is enabled either, the first
 one installed — ufw before firewalld. Having both on one machine is a
 misconfiguration rather than a supported setup, so the tie-break exists to be
-predictable; name the one you mean when both are present. With nothing
-installed it exits with a message naming what to install.
+predictable; name the one you mean when both are present. Then comes iptables,
+when a loader restores its saved rules or its tables carry rules of their own
+(see [iptables](#iptables)), and last nftables, for a machine nothing else
+manages. With nothing installed it exits with a message naming what to install.
 
 ## Theme
 
