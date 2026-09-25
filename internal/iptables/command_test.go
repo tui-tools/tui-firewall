@@ -132,8 +132,10 @@ func TestBuildAddRuleRefusals(t *testing.T) {
 	}{
 		"v6 address in the v4 chain": {v4Input, firewall.RuleSpec{
 			Action: firewall.ActionAllow, From: "2001:db8::1"}, "IPv6"},
-		"comment with a space": {v4Input, firewall.RuleSpec{
-			Action: firewall.ActionAllow, Comment: "two words"}, "one word"},
+		"comment with a double quote": {v4Input, firewall.RuleSpec{
+			Action: firewall.ActionAllow, Comment: `say "hi"`}, "double quotes"},
+		"comment with a newline": {v4Input, firewall.RuleSpec{
+			Action: firewall.ActionAllow, Comment: "two\nlines"}, "one line"},
 		"port without a protocol": {v4Input, firewall.RuleSpec{
 			Action: firewall.ActionAllow, Ports: "22"}, "protocol"},
 		"output interface on INPUT": {v4Input, firewall.RuleSpec{

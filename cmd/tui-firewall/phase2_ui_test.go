@@ -25,7 +25,7 @@ func TestAddFlowRuleThroughTheForm(t *testing.T) {
 	if a.mode != modeConfirm {
 		t.Fatalf("the form should have opened a confirm, mode = %v", a.mode)
 	}
-	want := `iifname "wan0" ct state established,related ip protocol icmp ` +
+	want := `iifname '"wan0"' ct state established,related ip protocol icmp ` +
 		`icmp type echo-request counter accept`
 	if !strings.Contains(a.confirm.Command, want) {
 		t.Errorf("preview does not carry the flow rule:\n%s\nwant substring\n%s",

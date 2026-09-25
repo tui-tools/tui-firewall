@@ -162,8 +162,9 @@ func TestNftablesAddRulePreview(t *testing.T) {
 	a.form.setFieldForTest("ports", "8443")
 	send(t, a, "enter")
 
+	// The preview is shell-quoted: pasted, it reaches nft as the same words.
 	want := `nft add rule inet tui input tcp dport 8443 counter accept ` +
-		`comment "the new service"`
+		`comment '"the new service"'`
 	if got := previewOf(t, a); got != want {
 		t.Errorf("preview =\n  %s\nwant\n  %s", got, want)
 	}
@@ -195,7 +196,7 @@ func TestNftablesPolicyPreview(t *testing.T) {
 	if !selectOption(t, a, string(firewall.PolicyAllow)) {
 		t.Fatal("the policy picker should offer allow")
 	}
-	want := "nft chain inet tui input { policy accept ; }"
+	want := "nft chain inet tui input '{' policy accept ';' '}'"
 	if got := previewOf(t, a); got != want {
 		t.Errorf("preview = %q, want %q", got, want)
 	}
@@ -214,8 +215,8 @@ func TestNftablesActionsMenuBuildsAPortForward(t *testing.T) {
 		answerStep(t, a, answer)
 	}
 
-	want := `nft add rule inet tui prerouting iifname "wan0" tcp dport 2222 ` +
-		`counter dnat ip to 10.10.0.7:22 comment "tcp 2222 to 10.10.0.7:22"`
+	want := `nft add rule inet tui prerouting iifname '"wan0"' tcp dport 2222 ` +
+		`counter dnat ip to 10.10.0.7:22 comment '"tcp 2222 to 10.10.0.7:22"'`
 	if got := previewOf(t, a); got != want {
 		t.Errorf("preview =\n  %s\nwant\n  %s", got, want)
 	}
@@ -236,8 +237,8 @@ func TestNftablesActionsMenuBuildsAnAlias(t *testing.T) {
 	answerStep(t, a, "yes")
 	answerStep(t, a, "peers allowed in")
 
-	want := `nft add set inet tui vpn_peers { type ipv4_addr ; flags interval ; ` +
-		`comment "peers allowed in" ; }`
+	want := `nft add set inet tui vpn_peers '{' type ipv4_addr ';' flags interval ';' ` +
+		`comment '"peers allowed in"' ';' '}'`
 	if got := previewOf(t, a); got != want {
 		t.Errorf("preview =\n  %s\nwant\n  %s", got, want)
 	}

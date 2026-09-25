@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tui-tools/tui-firewall/internal/firewall"
+	"github.com/tui-tools/tui-kit/runner"
 )
 
 // argvOf returns the single command of a Change, failing when a builder
@@ -15,7 +16,15 @@ func argvOf(t *testing.T, change firewall.Change) string {
 		t.Fatalf("expected one command, got %d: %s",
 			len(change.Commands), change.String())
 	}
-	return change.Commands[0].String()
+	return nftWords(change.Commands[0])
+}
+
+// nftWords renders a command as the words nft itself reads, joined with
+// spaces and without the shell quoting of the preview: these tests pin the
+// nft syntax a builder produces. That the preview quotes those words so a
+// pasted line reaches nft unchanged is covered by TestPreviewPastesAsTheSameArgv.
+func nftWords(cmd runner.Command) string {
+	return strings.Join(cmd.Argv, " ")
 }
 
 // routerChain fetches a chain of the router fixture.
@@ -589,7 +598,7 @@ func TestBuildExtraCreatesTheStructure(t *testing.T) {
 	}
 	want := "nft add chain inet tui input { type filter hook input " +
 		"priority 0 ; policy accept ; }"
-	if got := change.Commands[0].String(); got != want {
+	if got := nftWords(change.Commands[0]); got != want {
 		t.Errorf("argv =\n  %s\nwant\n  %s", got, want)
 	}
 	for _, cmd := range change.Commands {
