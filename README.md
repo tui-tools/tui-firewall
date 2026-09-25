@@ -135,7 +135,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.5.0/tui-firewall_0.5.0_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.0/tui-firewall_0.6.0_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -222,6 +222,8 @@ tui-firewall --demo=iptables      # sample cloud-image iptables
 tui-firewall --demo=nftables      # sample router ruleset
 tui-firewall --check              # read the firewall, print JSON, exit
 tui-firewall --report             # print what a bug report needs, exit
+tui-firewall --open 19443/tcp,41641/udp --comment 'headscale control (tailnet)'
+                                  # open the add form prefilled, per port
 tui-firewall --backend ufw        # skip autodetection
 tui-firewall --backend firewalld
 tui-firewall --backend iptables
@@ -264,6 +266,52 @@ would run a binary nobody asked this tool to touch.
 [tui-lab](https://github.com/tui-tools/tui-lab) uses it to test this tool
 against real firewalls on Ubuntu, Fedora and Omarchy Server; the assertions live
 in [`test/smoke.sh`](test/smoke.sh).
+
+### `--open`, a prefilled add form for a hand-off
+
+```sh
+tui-firewall --open 19443/tcp,41641/udp --comment 'headscale control (tailnet)'
+tui-firewall --open 19443/tcp --open 41641/udp     # the same list, repeated
+tui-firewall --demo --open 19443/tcp --comment test # try it on the demo
+```
+
+`--open` starts the UI straight in the add-rule form, filled in to allow the
+first port: action ALLOW, the port, the protocol and the `--comment`. Enter
+shows the preview and `y` applies it, exactly as a rule added by hand with `a`;
+nothing is applied without that confirm. Then the form for the next port opens,
+one form and one confirm per port, in the order given. `esc` skips a port and
+`n` at the confirm declines it; either way the sequence moves on. Every other
+field of the form is still there to change before Enter.
+
+It is the entry point for another tool that has just found a port closed, such
+as [tui-tailscale](https://github.com/tui-tools/tui-tailscale) handing over the
+ports a self-hosted control plane needs, so the user does not have to retype
+what that tool already knew.
+
+Where the rule goes depends on the backend:
+
+| Backend | Group the rule is added to |
+|---|---|
+| ufw | the rule list (`ufw allow 19443/tcp comment 'headscale control (tailnet)'`) |
+| firewalld | the default zone (`--add-port=19443/tcp`); firewalld has no rule comments, so `--comment` is not used and the status line says so |
+| nftables | the `input` chain of the `inet tui` table, or else the first chain hooked on input; on an empty ruleset the status line says so and the forms open once the chains are created with `x` |
+| iptables | the filter `INPUT` chain of each family, so a port gets one form for `iptables` and one for `ip6tables` |
+
+The value is checked before anything is read: each entry is a single port from
+1 to 65535 and `tcp` or `udp`, a port may not be given twice, and the comment is
+one line of at most 128 characters. A wrong value exits with the reason instead
+of opening a half-filled form. `--comment` without `--open`, and `--open` with
+`--check` or `--report`, are refused the same way. `--check` itself is
+unchanged.
+
+Every preview is shell-quoted, so a comment with a space or a parenthesis reads
+as one argument, and the line pasted into a shell runs the same argv:
+
+```console
+$ /usr/bin/sudo -n ufw allow 19443/tcp comment 'headscale control (tailnet)'
+```
+
+![A prefilled --open form](docs/screenshots/tui-firewall-open.png)
 
 ### `--report`, for bug reports
 
