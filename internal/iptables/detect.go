@@ -68,7 +68,7 @@ func DetectLayout() Layout {
 		layout.Enabled = unitEnabled("netfilter-persistent")
 		return layout
 	}
-	if fileExists("/usr/libexec/iptables/iptables.init") {
+	if fileExists(iptablesInit) {
 		layout := iptablesServicesLayout
 		layout.Enabled = unitEnabled("iptables")
 		return layout

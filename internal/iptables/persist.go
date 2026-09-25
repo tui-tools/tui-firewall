@@ -17,8 +17,17 @@ const (
 	LayoutNetfilterPersistent = "netfilter-persistent"
 	// LayoutIptablesServices is Fedora and RHEL's iptables-services: the
 	// iptables and ip6tables units restore /etc/sysconfig/iptables and
-	// ip6tables, and `service iptables save` writes them.
+	// ip6tables, and the package's init scripts write them on `save`.
 	LayoutIptablesServices = "iptables-services"
+)
+
+// The init scripts iptables-services ships. `service iptables save` is only a
+// wrapper around them (initscripts' legacy action runs `iptables.init save`),
+// and `service` comes from initscripts-service, which iptables-services does
+// not require: calling the scripts directly works on a minimal install too.
+const (
+	iptablesInit  = "/usr/libexec/iptables/iptables.init"
+	ip6tablesInit = "/usr/libexec/iptables/ip6tables.init"
 )
 
 // Layout is one persistence layer: its name, the files it restores, and
@@ -309,12 +318,12 @@ func BuildPersist(state State) (firewall.Change, error) {
 		}
 		note += daemonNote(state)
 		commands := []firewall.Command{{
-			Argv:        []string{"service", "iptables", "save"},
+			Argv:        []string{iptablesInit, "save"},
 			Description: "Save the running iptables rules",
 		}}
 		if state.HasV6 {
 			commands = append(commands, firewall.Command{
-				Argv:        []string{"service", "ip6tables", "save"},
+				Argv:        []string{ip6tablesInit, "save"},
 				Description: "Save the running ip6tables rules",
 			})
 		}

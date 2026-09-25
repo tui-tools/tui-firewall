@@ -346,10 +346,17 @@ func activeDetail(name string, sudoPrefix []string) string {
 		return "the " + name + " service is running on this machine"
 	}
 	layout := iptablesLayout()
-	detail := layout.Unit() + " is enabled and restores " + layout.V4Path +
+	// The unit is named after its package on Debian (netfilter-persistent),
+	// but on RHEL the iptables unit comes from iptables-services: name the
+	// package too, since "iptables is enabled" alone reads like a tautology.
+	loader := layout.Unit()
+	if loader != layout.Kind {
+		loader = "the " + loader + " unit (" + layout.Kind + ")"
+	}
+	detail := loader + " is enabled and restores " + layout.V4Path +
 		" at boot, so iptables is the firewall in charge of this machine"
 	if !layout.Enabled {
-		detail = layout.Unit() + " restored " + layout.V4Path +
+		detail = loader + " restored " + layout.V4Path +
 			" on this boot, so iptables is the firewall in charge of this machine"
 	}
 	return detail + nativeTablesNote(sudoPrefix)

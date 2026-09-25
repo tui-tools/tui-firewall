@@ -68,8 +68,13 @@ func (r *Real) runnerFor(bin string) (*runner.Runner, error) {
 		return nil, err
 	}
 	search := sbinPaths(bin)
-	if bin == "cat" {
+	switch {
+	case bin == "cat":
 		search = []string{"/usr/bin/cat", "/bin/cat"}
+	case strings.HasPrefix(bin, "/"):
+		// An absolute path, like the iptables-services init scripts, is its
+		// own location: there is nothing to search for.
+		search = nil
 	}
 	run, err := runner.New(runner.Options{
 		Bin:         bin,

@@ -379,6 +379,29 @@ func TestResolveAutoPicksIptablesWhenItsLoaderRan(t *testing.T) {
 	}
 }
 
+func TestResolveAutoIptablesNamesIptablesServices(t *testing.T) {
+	// On RHEL the loader is the iptables unit of iptables-services: the
+	// sentence names the package, not only a unit called iptables.
+	stubAllProbes(t, probeState{}, probeState{installed: true}, probeState{installed: true})
+	stubIptables(t, probeState{installed: true, active: true, enabled: true},
+		iptables.Layout{Kind: iptables.LayoutIptablesServices,
+			V4Path: "/etc/sysconfig/iptables", V6Path: "/etc/sysconfig/ip6tables",
+			Enabled: true})
+
+	selection, err := Resolve(autoConfig())
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if selection.Name != BackendIptables {
+		t.Fatalf("Resolve = %q, want iptables", selection.Name)
+	}
+	for _, want := range []string{"the iptables unit (iptables-services)", "/etc/sysconfig/iptables"} {
+		if !strings.Contains(selection.Detail, want) {
+			t.Errorf("detail %q should mention %q", selection.Detail, want)
+		}
+	}
+}
+
 func TestResolveAutoIptablesSaysWhenNativeTablesExistToo(t *testing.T) {
 	// A host with both: the iptables backend is chosen, and the sentence says
 	// there is a native nft table it will not show.

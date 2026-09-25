@@ -3,9 +3,11 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tui-tools/tui-firewall/badge)](https://scorecard.dev/viewer/?uri=github.com/tui-tools/tui-firewall)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14368/badge)](https://www.bestpractices.dev/projects/14368)
 
+<!-- stability:start -->
 > **Beta.** The family is days old and still changing. Package names, flags
 > and keys may move without notice until 1.0. Pin versions, and report what
 > breaks.
+<!-- stability:end -->
 
 A terminal UI for the Linux firewall — **ufw**, **firewalld**, **iptables** and **nftables** —
 that shows the rules you actually have and **previews the exact command line of
@@ -133,7 +135,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.4.1/tui-firewall_0.4.1_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.5.0/tui-firewall_0.5.0_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -456,7 +458,9 @@ rules in the preview:
 ![Persisting with a diff preview](docs/screenshots/tui-firewall-iptables-persist.png)
 
 The command is the persistence layer's own: `netfilter-persistent save` on
-Debian and Ubuntu, `service iptables save` and `service ip6tables save` on RHEL.
+Debian and Ubuntu, `/usr/libexec/iptables/iptables.init save` and
+`ip6tables.init save` on Fedora and RHEL (what `service iptables save` runs,
+without needing the `service` wrapper installed).
 The comparison covers the filter table and leaves out the chains other daemons
 rebuild, so a host where tailscaled added `ts-input` after the last save still
 reads as in sync.
@@ -693,7 +697,7 @@ are capped, so a firewall under a scan cannot grow it without bound.
 - Insert a rule right before the chain's catch-all REJECT or DROP, with the
   position and the reason in the preview; refuse a position after it. Delete by
   specification.
-- Persist with `netfilter-persistent save` or `service iptables save`, previewed
+- Persist with `netfilter-persistent save` or iptables-services' `iptables.init save`, previewed
   with the diff against the saved files; report runtime-vs-saved drift in the
   header, the status line and `--check`.
 - Stage changes and apply them through `iptables-restore --noflush`, with the
@@ -808,7 +812,7 @@ hidden; one below the minimum is marked as such and the tool still runs.
 | Binary | `iptables` |
 | Version read with | `iptables --version` |
 | Minimum | 1.6 |
-| Tested | `1.8.10` |
+| Tested | `1.8.10`, `1.8.11` |
 
 | Versions | What changes |
 | --- | --- |

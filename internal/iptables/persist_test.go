@@ -90,7 +90,9 @@ func TestBuildPersistRHEL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPersist: %v", err)
 	}
-	if change.String() != "service iptables save\nservice ip6tables save" {
+	want := "/usr/libexec/iptables/iptables.init save\n" +
+		"/usr/libexec/iptables/ip6tables.init save"
+	if change.String() != want {
 		t.Errorf("persist = %q", change.String())
 	}
 	if !strings.Contains(change.Note, "systemctl enable iptables") {
