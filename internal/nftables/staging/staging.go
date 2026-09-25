@@ -1,4 +1,5 @@
-// Package staging is the connectivity-safe apply for the nftables backend.
+// Package staging is the connectivity-safe apply for the backends that can
+// snapshot their ruleset: nftables, and iptables through iptables-restore.
 //
 // Applying a router's rules one at a time can cut the operator off: a forward
 // policy set to drop before the accept rule that keeps a session alive, a
@@ -64,12 +65,57 @@ func RealTimer(d time.Duration, f func()) Timer {
 	return realTimer{t: time.AfterFunc(d, f)}
 }
 
+// Dialect renders a staged batch and its rollback in one firewall's own
+// tooling. The lifecycle — stage, snapshot, apply, keep or roll back — is the
+// same for every backend that can snapshot its ruleset; what differs is which
+// command applies a batch atomically and which one replays a snapshot.
+type Dialect interface {
+	// Apply renders the pending changes as the change that applies them.
+	Apply(pending []firewall.Change) (firewall.Change, error)
+	// Preview is the payload the confirm dialog shows for Apply: the bytes
+	// that go to the applying command's standard input.
+	Preview(pending []firewall.Change) string
+	// Restore renders the change that puts a snapshot back.
+	Restore(snapshot string) firewall.Change
+	// Atomicity says, in one clause, what all-or-nothing means for this
+	// dialect ("as one nft transaction: all of them, or none").
+	Atomicity() string
+}
+
+// NftDialect is the nftables dialect: the batch is one `nft -f -` script and
+// the rollback flushes the ruleset and replays the snapshot, both atomic.
+type NftDialect struct{}
+
+// Apply renders the batch as one nft transaction.
+func (NftDialect) Apply(pending []firewall.Change) (firewall.Change, error) {
+	return firewall.One(firewall.Command{
+		Argv:        []string{"nft", "-f", "-"},
+		Description: fmt.Sprintf("Apply %s atomically", plural(len(pending), "staged change")),
+		Destructive: true,
+		Stdin:       batchScript(pending),
+	}), nil
+}
+
+// Preview renders the nft script the batch sends.
+func (NftDialect) Preview(pending []firewall.Change) string {
+	return strings.TrimRight(batchScript(pending), "\n")
+}
+
+// Restore renders the flush-and-replay transaction.
+func (NftDialect) Restore(snapshot string) firewall.Change {
+	return firewall.One(restoreCommand(snapshot))
+}
+
+// Atomicity describes an nft transaction.
+func (NftDialect) Atomicity() string { return "as one nft transaction: all of them, or none" }
+
 // Session is a set of staged changes and the commit/rollback lifecycle around
 // applying them as one transaction. The zero value is not usable; call New.
 type Session struct {
 	mu       sync.Mutex
 	timeout  time.Duration
 	newTimer NewTimer
+	dialect  Dialect
 
 	pending  []firewall.Change
 	snapshot string
@@ -82,10 +128,26 @@ type Session struct {
 // DefaultTimeout when it is zero or negative. It uses the real countdown; a
 // test overrides it with SetTimer.
 func New(timeout time.Duration) *Session {
+	return NewWithDialect(timeout, NftDialect{})
+}
+
+// NewWithDialect returns a Session that applies and rolls back through the
+// given dialect.
+func NewWithDialect(timeout time.Duration, dialect Dialect) *Session {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &Session{timeout: timeout, newTimer: RealTimer}
+	if dialect == nil {
+		dialect = NftDialect{}
+	}
+	return &Session{timeout: timeout, newTimer: RealTimer, dialect: dialect}
+}
+
+// Atomicity says what all-or-nothing means for this Session's dialect.
+func (s *Session) Atomicity() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dialect.Atomicity()
 }
 
 // SetTimer replaces the countdown factory, so a test can drive the timeout by
@@ -192,34 +254,45 @@ func (s *Session) SnapshotText() string {
 // script. nft reads the file as one atomic transaction — if any line is
 // rejected, none of it is applied — which is the all-or-nothing the flow needs.
 //
-// It does not run anything and it does not change the phase: the caller runs
-// the returned command, and calls Arm once it succeeds.
+// It is the single-command form of ApplyChange, kept for the nftables dialect
+// whose apply is exactly one command. It does not run anything and it does not
+// change the phase: the caller runs the returned command, and calls Arm once
+// it succeeds.
 func (s *Session) Apply() (firewall.Command, error) {
+	change, err := s.ApplyChange()
+	if err != nil {
+		return firewall.Command{}, err
+	}
+	if len(change.Commands) != 1 {
+		return firewall.Command{}, errors.New(
+			"staging: this dialect applies in more than one command; use ApplyChange")
+	}
+	return change.Commands[0], nil
+}
+
+// ApplyChange renders the whole staged set as the change the dialect applies
+// it with. Like Apply it runs nothing and leaves the phase alone.
+func (s *Session) ApplyChange() (firewall.Change, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.phase != Building {
-		return firewall.Command{}, errors.New(
+		return firewall.Change{}, errors.New(
 			"staging: a batch is already awaiting confirmation")
 	}
 	if len(s.pending) == 0 {
-		return firewall.Command{}, errors.New("staging: nothing is staged to apply")
+		return firewall.Change{}, errors.New("staging: nothing is staged to apply")
 	}
-	return firewall.Command{
-		Argv:        []string{"nft", "-f", "-"},
-		Description: fmt.Sprintf("Apply %s atomically", plural(len(s.pending), "staged change")),
-		Destructive: true,
-		Stdin:       batchScript(s.pending),
-	}, nil
+	return s.dialect.Apply(s.pending)
 }
 
-// PreviewApply renders the transaction the way the confirm dialog shows it: one
-// nft script line per command, the same bytes Apply puts on nft's standard
-// input. Stdin never appears in a command-line preview — a payload is not a
-// command line — so the dialog shows this instead.
+// PreviewApply renders the transaction the way the confirm dialog shows it: the
+// same bytes the apply puts on its command's standard input. Stdin never
+// appears in a command-line preview — a payload is not a command line — so the
+// dialog shows this instead.
 func (s *Session) PreviewApply() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return strings.TrimRight(batchScript(s.pending), "\n")
+	return s.dialect.Preview(s.pending)
 }
 
 // Arm records that the batch was applied and starts the keep-confirmation
@@ -272,25 +345,44 @@ func (s *Session) Commit() error {
 }
 
 // Rollback builds the command that restores the pre-apply snapshot and resets
-// the Session. The restore is itself one `nft -f` transaction: it flushes the
-// whole ruleset and replays the snapshot, so the machine ends exactly where it
-// was before the batch, in one atomic step.
+// the Session. For nftables the restore is itself one `nft -f` transaction: it
+// flushes the whole ruleset and replays the snapshot, so the machine ends
+// exactly where it was before the batch, in one atomic step. It is the
+// single-command form of RollbackChange.
 func (s *Session) Rollback() (firewall.Command, error) {
+	change, err := s.RollbackChange()
+	if err != nil {
+		return firewall.Command{}, err
+	}
+	if len(change.Commands) != 1 {
+		return firewall.Command{}, errors.New(
+			"staging: this dialect restores in more than one command; use RollbackChange")
+	}
+	return change.Commands[0], nil
+}
+
+// RollbackChange builds the change that restores the pre-apply snapshot, in
+// the Session's dialect, and resets the Session.
+func (s *Session) RollbackChange() (firewall.Change, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.phase != Awaiting {
-		return firewall.Command{}, errors.New("staging: nothing was applied to roll back")
+		return firewall.Change{}, errors.New("staging: nothing was applied to roll back")
 	}
-	cmd := restoreCommand(s.snapshot)
+	change := s.dialect.Restore(s.snapshot)
 	s.reset()
-	return cmd, nil
+	return change, nil
 }
 
-// PreviewRollback renders the rollback transaction the way the dialog shows it.
+// PreviewRollback renders the rollback payload the way the dialog shows it.
 func (s *Session) PreviewRollback() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return restoreCommand(s.snapshot).Stdin
+	var parts []string
+	for _, cmd := range s.dialect.Restore(s.snapshot).Commands {
+		parts = append(parts, cmd.Stdin)
+	}
+	return strings.Join(parts, "")
 }
 
 // reset stops the timer and returns the Session to an empty Building state. The

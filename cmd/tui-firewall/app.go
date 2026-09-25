@@ -171,11 +171,17 @@ func newApp(backend firewall.Backend, th theme.Theme,
 		a.caps.SupportsComments = false
 	}
 	// Staging is offered only where a rollback is possible: a backend that can
-	// snapshot its own ruleset. That is the nftables backend and its demo; ufw
-	// and firewalld apply through their own daemons and have no such snapshot.
+	// snapshot its own ruleset. That is the nftables backend, the iptables one
+	// and their demos; ufw and firewalld apply through their own daemons and
+	// have no such snapshot.
 	if snap, ok := backend.(snapshotter); ok {
 		a.snap = snap
 		a.staging = staging.New(0)
+		// A backend that stages in its own tooling says how; nftables is the
+		// default dialect.
+		if d, ok := backend.(stagingDialecter); ok {
+			a.staging = staging.NewWithDialect(0, d.StagingDialect())
+		}
 	}
 	if th.Warning != "" {
 		a.setStatus(ui.StatusWarn, th.Warning)
@@ -287,6 +293,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			summary = "done"
 		}
 		a.setStatusf(ui.StatusOK, "%s: %s", msg.change.Description, firstLine(summary))
+		// On a backend whose changes are runtime-only until persisted, the
+		// success line says so: the next boot restores the saved file.
+		if _, ok := a.backend.(persister); ok && !wasSave {
+			a.status += "  ·  runtime only, W persists"
+		}
 		a.loading = true
 		if wasSave {
 			if saver, ok := a.backend.(tableSaver); ok {
@@ -319,6 +330,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.openSaveConfirm(msg)
+		return a, nil
+
+	case persistReadyMsg:
+		if msg.err != nil {
+			a.setStatus(ui.StatusError, msg.err.Error())
+			return a, nil
+		}
+		a.openPersistConfirm(msg)
 		return a, nil
 
 	case logEventMsg:

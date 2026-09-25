@@ -52,7 +52,12 @@ func TestParseFlagsDemoBackend(t *testing.T) {
 		t.Errorf("demo = %+v, want firewalld", opts.demo)
 	}
 
-	if _, err := parseFlags([]string{"--demo=iptables"}, devNull); err == nil {
+	opts, err = parseFlags([]string{"--demo=iptables"}, devNull)
+	if err != nil || opts.demo.backend != backends.BackendIptables {
+		t.Errorf("--demo=iptables: demo = %+v, err = %v, want iptables", opts.demo, err)
+	}
+
+	if _, err := parseFlags([]string{"--demo=pf"}, devNull); err == nil {
 		t.Error("an unknown demo backend must be rejected")
 	}
 }

@@ -111,6 +111,10 @@ type Match struct {
 	// Unmodeled holds the textual rendering of every expression the columns
 	// above have no room for — a ct state match, a meta mark, a limit.
 	Unmodeled []string `json:"unmodeled,omitempty"`
+	// Xtables lists the xtables matches and targets the rule carries ("xt
+	// target REJECT"): what iptables-nft writes when a match has no native nft
+	// translation, and the mark of a rule nft can show but not rebuild.
+	Xtables []string `json:"xtables,omitempty"`
 
 	// family4 and family6 record which address header the rule matched on,
 	// which is how a rule in an `inet` table says which family it is about.

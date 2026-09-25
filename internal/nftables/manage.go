@@ -78,7 +78,9 @@ func DetectManagement(rs Ruleset) Management {
 				", so ufw is the firewall in charge of this machine",
 		}
 	default:
-		return Management{}
+		// Neither of the two managers: the xtables tools may still be the
+		// firewall in charge, writing table ip filter through iptables-nft.
+		return detectXtablesManagement(rs)
 	}
 }
 

@@ -1,7 +1,7 @@
 // Command tui-firewall is a terminal UI for the system firewall. It shows the
 // current rules and previews the exact command line of every change before
-// running it. ufw and firewalld are both driven, behind one generic interface,
-// and the UI never builds a command line for either.
+// running it. ufw, firewalld, iptables and nftables are all driven, behind one
+// generic interface, and the UI never builds a command line for any of them.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/tui-tools/tui-firewall/internal/backends"
 	"github.com/tui-tools/tui-firewall/internal/firewall"
 	"github.com/tui-tools/tui-firewall/internal/firewalld"
+	"github.com/tui-tools/tui-firewall/internal/iptables"
 	"github.com/tui-tools/tui-firewall/internal/nftables"
 	"github.com/tui-tools/tui-firewall/internal/ufw"
 	"github.com/tui-tools/tui-kit/config"
@@ -64,13 +65,14 @@ func (d *demoFlag) Set(value string) error {
 	case "", "true":
 		d.backend = backends.BackendUFW
 		return nil
-	case backends.BackendUFW, backends.BackendFirewalld, backends.BackendNftables:
+	case backends.BackendUFW, backends.BackendFirewalld, backends.BackendNftables,
+		backends.BackendIptables:
 		d.backend = value
 		return nil
 	default:
-		return fmt.Errorf("unknown demo backend %q: use %s, %s or %s",
+		return fmt.Errorf("unknown demo backend %q: use %s, %s, %s or %s",
 			value, backends.BackendUFW, backends.BackendFirewalld,
-			backends.BackendNftables)
+			backends.BackendIptables, backends.BackendNftables)
 	}
 }
 
@@ -98,14 +100,14 @@ func parseFlags(args []string, out *os.File) (options, error) {
 	fs.SetOutput(out)
 	fs.Var(&opts.demo, "demo",
 		"run against sample data, without touching the system firewall; "+
-			"--demo=firewalld and --demo=nftables show those models instead "+
-			"of the ufw one")
+			"--demo=firewalld, --demo=iptables and --demo=nftables show those "+
+			"models instead of the ufw one")
 	fs.BoolVar(&opts.check, "check", false,
 		"read the firewall and print the parsed model as JSON, then exit "+
 			"(no UI, no changes); exit 1 if the backend cannot be read")
 	fs.BoolVar(&opts.report, "report", false, reportUsage)
 	fs.StringVar(&opts.backend, "backend", "",
-		"firewall backend: auto, ufw, firewalld or nftables "+
+		"firewall backend: auto, ufw, firewalld, iptables or nftables "+
 			"(overrides the config file)")
 	fs.StringVar(&opts.themePath, "theme", "",
 		"path to an Omarchy-style colors.toml (overrides the config file)")
@@ -245,6 +247,8 @@ func pickBackend(cfg config.Config, opts options) (firewall.Backend, error) {
 			return firewalld.NewFake(), nil
 		case backends.BackendNftables:
 			return nftables.NewFake(), nil
+		case backends.BackendIptables:
+			return iptables.NewFake(), nil
 		default:
 			return ufw.NewFake(), nil
 		}

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "name": "tui-firewall",
   "binary": "tui-firewall",
-  "tagline": "ufw, firewalld and nftables, with every change previewed before it runs",
-  "description": "A terminal UI for the Linux firewall, driving **ufw**, **firewalld** and **nftables** directly. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or chain policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes.\n\nOn a machine neither ufw nor firewalld manages it reads `nft -j list ruleset` and drives nft itself: filter chains by hook, a NAT view for masquerading and port forwards, and named sets as aliases with the number of rules using each. It writes only to a base chain whose policy nft reported, or to its own table, and says why when it will not.\n\nRun `tui-firewall --demo` for an in-memory ufw, `--demo=firewalld` for firewalld, or `--demo=nftables` for a sample router ruleset: every key works, every command is built and previewed for real, and nothing touches your system.",
+  "tagline": "ufw, firewalld, iptables and nftables, with every change previewed before it runs",
+  "description": "A terminal UI for the Linux firewall, driving **ufw**, **firewalld**, **iptables** and **nftables** directly. It shows the rules you actually have — action, ports, source, destination, services, rich rules, IPv6 and forwarding included — alongside the default policies or chain policies and the logging level.\n\nThe UI never builds a command line. It talks to a backend behind an interface, which returns a firewall-neutral model and produces command values; the confirm dialog shows those values and hands the same ones to the runner, so what you read is what executes.\n\nOn a machine neither ufw nor firewalld manages it reads `nft -j list ruleset` and drives nft itself: filter chains by hook, a NAT view for masquerading and port forwards, and named sets as aliases with the number of rules using each. It writes only to a base chain whose policy nft reported, or to its own table, and says why when it will not.\n\nOn a machine whose filter tables belong to iptables (iptables-nft or legacy, restored at boot by iptables-persistent or iptables-services) it drives iptables and ip6tables: a new rule lands in front of the chain's catch-all REJECT rather than after it, and persisting the running rules is its own previewed step, with the header saying when they differ from the saved file.\n\nRun `tui-firewall --demo` for an in-memory ufw, `--demo=firewalld` for firewalld, `--demo=iptables` for a cloud-image iptables, or `--demo=nftables` for a sample router ruleset: every key works, every command is built and previewed for real, and nothing touches your system.",
   "category": "firewall",
   "homepage": "https://github.com/tui-tools/tui-firewall",
   "repo": "https://github.com/tui-tools/tui-firewall",
@@ -185,6 +185,31 @@
       "tested": [
         "2.4.4"
       ]
+    },
+    {
+      "name": "iptables",
+      "binary": "iptables",
+      "versionCommand": [
+        "iptables",
+        "--version"
+      ],
+      "versionRegex": "iptables v([0-9][0-9.]*)",
+      "minimum": "1.6",
+      "searchPaths": [
+        "/usr/sbin/iptables",
+        "/sbin/iptables"
+      ],
+      "notes": [
+        {
+          "range": "<1.8",
+          "impact": "only the legacy xtables interface exists, so the rules live outside nf_tables and the nft ruleset cannot show them; the backend reads them through iptables-save and the selector asks the legacy tables directly"
+        },
+        {
+          "range": ">=1.8",
+          "impact": "iptables-nft writes table ip filter and ip6 filter in nf_tables, and `iptables --version` says which variant is installed; the nftables backend treats those tables as read-only and points here"
+        }
+      ],
+      "tested": []
     },
     {
       "name": "nftables",

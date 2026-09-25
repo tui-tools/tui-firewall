@@ -42,11 +42,16 @@ type saveReadyMsg struct {
 // capture is a privileged read that can block, so it runs off the update loop
 // and comes back through saveReadyMsg.
 func (a *app) beginSave() tea.Cmd {
+	// A backend with a persistence layer of its own (iptables) persists the
+	// running rules through it; the nftables save below is a different file.
+	if p, ok := a.backend.(persister); ok {
+		return a.beginPersist(p)
+	}
 	saver, ok := a.backend.(tableSaver)
 	if !ok {
 		a.setStatus(ui.StatusWarn,
-			"saving the ruleset to a file is an nftables feature; ufw and "+
-				"firewalld persist their own configuration")
+			"saving the ruleset to a file is an nftables and iptables feature; "+
+				"ufw and firewalld persist their own configuration")
 		return nil
 	}
 	if a.awaitingKeep {

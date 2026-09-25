@@ -67,6 +67,14 @@ func decodeStatement(m *Match, key string, value any) string {
 		return renderMasquerade(value)
 	case "dnat", "snat", "redirect":
 		return decodeNAT(m, key, value)
+	case "xt":
+		// An xtables match or target: iptables-nft put it there, and nft can
+		// only name it. It is recorded so the table can be recognised as one
+		// the xtables tools own, and rendered the way nft prints it.
+		rendered := renderXtables(value)
+		m.Xtables = append(m.Xtables, rendered)
+		m.Unmodeled = append(m.Unmodeled, rendered)
+		return rendered
 	default:
 		// An expression with no column of its own: keep it as text, beside
 		// the columns rather than instead of them.
@@ -448,6 +456,20 @@ func rejectDetail(value any) string {
 		}
 	}
 	return oneLine(out)
+}
+
+// renderXtables renders an xtables expression the way nft prints it: "xt
+// match conntrack", "xt target REJECT". nft does not know what the extension
+// was asked to do, only its name, which is exactly why such a rule cannot be
+// rebuilt from nft's side.
+func renderXtables(value any) string {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return "xt " + renderOperand(value)
+	}
+	kind, _ := obj["type"].(string)
+	name, _ := obj["name"].(string)
+	return strings.TrimSpace("xt " + kind + " " + name)
 }
 
 // renderUnknown renders a statement this package has no column for, keeping

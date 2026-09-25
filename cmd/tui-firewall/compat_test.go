@@ -44,7 +44,7 @@ func TestProbeCompatSkipsDemo(t *testing.T) {
 // A backend the manifest does not describe is not an error, it is simply
 // nothing to show.
 func TestProbeCompatUnknownBackend(t *testing.T) {
-	got := probeCompat(context.Background(), "iptables", false)
+	got := probeCompat(context.Background(), "pf", false)
 	if got.Backend != "" {
 		t.Errorf("unknown backend = %+v, want the zero result", got)
 	}

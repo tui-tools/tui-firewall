@@ -137,6 +137,12 @@ func (a *app) headerView() string {
 	if fact, ok := a.disabledFact(); ok {
 		facts = append(facts, fact)
 	}
+	// On iptables a change is runtime-only until it is persisted, and the next
+	// boot restores the saved file: whether the two match is a fact about the
+	// machine's next reboot.
+	if fact, ok := a.persistFact(); ok {
+		facts = append(facts, fact)
+	}
 
 	// The group selector only makes sense when the backend has more than one
 	// group; ufw always has exactly one.
@@ -449,6 +455,9 @@ func (a *app) shortHelpKeys() []ui.KeyHint {
 	if _, ok := a.backend.(tableSaver); ok {
 		hints = append(hints, ui.KeyHint{Key: "W", Desc: "save"})
 	}
+	if _, ok := a.backend.(persister); ok {
+		hints = append(hints, ui.KeyHint{Key: "W", Desc: "persist"})
+	}
 	if len(a.backend.Extras(a.model, a.group)) > 0 {
 		hints = append(hints, ui.KeyHint{Key: "x", Desc: "actions"})
 	}
@@ -490,12 +499,13 @@ func helpKeys() []ui.KeyHint {
 		{Key: "w", Desc: "watch the live firewall log of the logged rules (nftables)"},
 		{Key: "x", Desc: "actions this backend offers beyond these keys"},
 		{Key: "[ / ]", Desc: "previous / next group (multi-group backends)"},
-		{Key: "v", Desc: "pick a group: a firewalld zone, an nftables chain, NAT, aliases"},
+		{Key: "v", Desc: "pick a group: a firewalld zone, an nftables or iptables chain, NAT, aliases"},
 		{Key: "R", Desc: "reload the view from the firewall"},
-		{Key: "s", Desc: "toggle staging: collect changes instead of applying them (nftables)"},
+		{Key: "s", Desc: "toggle staging: collect changes instead of applying them (nftables, iptables)"},
 		{Key: "S", Desc: "review and apply the staged changes as one atomic transaction"},
 		{Key: "k", Desc: "keep an applied batch before its rollback timer fires"},
 		{Key: "W", Desc: "save the tool's own table to a file loaded on boot, with a diff preview (nftables)"},
+		{Key: "W", Desc: "persist the running rules to rules.v4/v6 with a diff preview (iptables)"},
 		{Key: "?", Desc: "this help"},
 		{Key: "q", Desc: "quit"},
 		{Key: "", Desc: ""},
