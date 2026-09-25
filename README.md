@@ -135,7 +135,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.0/tui-firewall_0.6.0_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.1/tui-firewall_0.6.1_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
