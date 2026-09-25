@@ -88,6 +88,10 @@ type options struct {
 	themePath   string
 	sudo        string
 	showVersion bool
+	// open and comment are the --open hand-off: ports to prefill the add
+	// form with, one form per port, and the comment for those rules.
+	open    openFlag
+	comment string
 	// sudoSet records whether -sudo was passed, so `--sudo ""` can disable
 	// escalation instead of reading as "not given".
 	sudoSet bool
@@ -113,6 +117,8 @@ func parseFlags(args []string, out *os.File) (options, error) {
 		"path to an Omarchy-style colors.toml (overrides the config file)")
 	fs.StringVar(&opts.sudo, "sudo", "",
 		"privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
+	fs.Var(&opts.open, "open", openUsage)
+	fs.StringVar(&opts.comment, "comment", "", commentUsage)
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(out, "tui-firewall — a terminal UI for the system firewall\n\n"+
@@ -153,6 +159,9 @@ func run(args []string) error {
 	if opts.showVersion {
 		fmt.Println("tui-firewall", version)
 		return nil
+	}
+	if err := validateOpenOptions(opts); err != nil {
+		return err
 	}
 
 	cfg, err := config.Load(config.Options{Tool: toolName, Defaults: defaults()})
@@ -201,8 +210,9 @@ func run(args []string) error {
 			selectionDetail(cfg, opts), os.Stdout)
 	}
 
-	program := tea.NewProgram(newApp(backend, theme.New(), backendCompat),
-		tea.WithAltScreen())
+	a := newApp(backend, theme.New(), backendCompat)
+	a.queueOpen(opts.open.ports, opts.comment)
+	program := tea.NewProgram(a, tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }

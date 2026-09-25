@@ -132,6 +132,11 @@ type app struct {
 	loadFailed bool
 	// busy blocks input while a command runs.
 	busy bool
+	// loaded reports that a Load has succeeded at least once.
+	loaded bool
+
+	// open is the --open sequence still to show, or nil.
+	open *openQueue
 }
 
 // loadedMsg carries the result of a Load.
@@ -228,8 +233,17 @@ func (a *app) setStatusf(kind ui.StatusKind, format string, args ...any) {
 	a.setStatus(kind, fmt.Sprintf(format, args...))
 }
 
-// Update is the main event loop.
+// Update is the main event loop. After every message it gives the --open
+// sequence a chance to show its next form, which only happens once the screen
+// is idle again.
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := a.update(msg)
+	a.advanceOpen()
+	return model, cmd
+}
+
+// update handles one message.
+func (a *app) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
@@ -244,6 +258,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.loadFailed = false
+		a.loaded = true
 		a.model = msg.model
 		if a.persistHintPending {
 			a.persistHintPending = false
