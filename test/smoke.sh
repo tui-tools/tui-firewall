@@ -243,9 +243,11 @@ case "$backend" in
     #    process after another (it took about 8 s on this guest before).
     #    The bar is looser than the ~1 s it takes, so a busy host does not fail
     #    it, and far below the old cost, so a return to serial reads does.
-    start_ms=$(date +%s%3N)
+    #    EPOCHREALTIME rather than `date +%s%3N`, which the uutils date of
+    #    newer distributions does not expand.
+    start=$EPOCHREALTIME
     sudo -n "$bin" --check >/dev/null 2>&1
-    check_ms=$(( $(date +%s%3N) - start_ms ))
+    check_ms=$(awk -v a="$start" -v b="$EPOCHREALTIME" 'BEGIN { printf "%d", (b - a) * 1000 }')
     check "--check answers in under 3 s (took ${check_ms} ms)" \
       "test $check_ms -lt 3000 && echo fast" \
       '^fast$'

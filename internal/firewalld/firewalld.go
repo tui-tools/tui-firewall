@@ -43,7 +43,8 @@
 //     an entry present in only one is marked "runtime only" or
 //     "permanent only".
 //   - Model.Services: `--get-services`.
-//   - Model.Enabled: `--state`. Model.Logging: `--get-log-denied`.
+//   - Model.Enabled: the daemon answered the runtime zone listing (or
+//     `--state`, when it did not). Model.Logging: `--get-log-denied`.
 //   - Model.Warning: panic mode, from `--query-panic`.
 //   - Mutations: the runtime command and the same command with `--permanent`,
 //     both shown in the confirm dialog. No reload, so no connection is
@@ -118,7 +119,7 @@ func (r *Real) Run(ctx context.Context, change firewall.Change) (string, error) 
 // Load reads the whole firewalld state: the daemon's own status, the runtime
 // and permanent zone listings, the policy objects and the global settings.
 //
-// Only `--state` is fatal. Everything else degrades: a firewalld too old for
+// Only a stopped daemon is fatal. Everything else degrades: a firewalld too old for
 // policy objects, or one that refuses a read, loses that part of the picture
 // rather than the whole screen. The reads themselves, and why they run
 // together rather than one after another, are described on loadSnapshot.

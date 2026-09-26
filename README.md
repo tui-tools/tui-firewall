@@ -263,6 +263,30 @@ distinguishable from "ufw is not installed" without running the detection
 again. The version is probed for the selected backend only: probing the other
 would run a binary nobody asked this tool to touch.
 
+What it costs is the backend's own reads, so it depends on the backend:
+
+| Backend | What `--check` runs | Typical time |
+|---|---|---|
+| ufw | `ufw status verbose`, `ufw status numbered`, `ufw app list` | well under half a second |
+| nftables | `nft -j list ruleset` | well under half a second |
+| iptables | `iptables-save -c` and `ip6tables-save -c` | well under half a second |
+| firewalld | eight `firewall-cmd` reads started together, plus `firewall-cmd --version` | about 1 s on a 2-CPU Fedora 44 machine (firewalld 2.4.4) |
+
+firewalld is the slow one because every `firewall-cmd` is a Python
+interpreter that imports the firewalld client before it makes its D-Bus
+calls: 100 to 300 ms each, most of it start-up rather than firewalld
+answering. Since 0.6.2 the tool asks for whole listings and starts them
+together, so the cost is roughly that of the slowest one on an idle machine,
+where 0.6.1 paid for 10 reads plus 2 per policy object one after another
+(about 8 s on the lab's Fedora guest). With firewalld stopped every read
+waits about 10 s for the daemon on D-Bus before giving up, so `--check`
+takes that long to say it is not running.
+
+A tool that reads `--check` on every refresh, as tui-wireguard and
+tui-tailscale do, can keep the answer for a few seconds rather than asking
+again for each redraw: the firewall rarely changes between two reloads, and
+the tool that changes it knows when it did.
+
 [tui-lab](https://github.com/tui-tools/tui-lab) uses it to test this tool
 against real firewalls on Ubuntu, Fedora and Omarchy Server; the assertions live
 in [`test/smoke.sh`](test/smoke.sh).
@@ -724,12 +748,14 @@ are capped, so a firewall under a scan cannot grow it without bound.
 
 **firewalld**
 
-- Read `--state`, `--list-all-zones` and `--list-all-policies` (runtime and
-  permanent), `--get-services`, `--get-log-denied`, `--query-panic` and
-  `--query-lockdown`, all nine started together. The default zone and the
-  active zones come from the `(default, active)` flags of the zone listing; a
-  firewalld that prints no flags, or has no `--list-all-policies`, is asked
-  `--get-default-zone`, `--get-active-zones` and `--get-policies` instead.
+- Read `--list-all-zones` and `--list-all-policies` (runtime and permanent),
+  `--get-services`, `--get-log-denied`, `--query-panic` and `--query-lockdown`,
+  all eight started together. The default zone and the active zones come from
+  the `(default, active)` flags of the zone listing; a firewalld that prints no
+  flags, or has no `--list-all-policies`, is asked `--get-default-zone`,
+  `--get-active-zones` and `--get-policies` instead, and `--state` is asked
+  only when the zone listing fails, to tell a stopped daemon from a refused
+  read.
 - One group per zone, default zone first, then the other active zones; policy
   objects follow as further groups.
 - Every entry kind, each marked runtime-only or permanent-only where they

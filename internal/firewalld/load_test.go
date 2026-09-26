@@ -20,6 +20,9 @@ type host struct {
 	// missing lists the reads this firewalld does not know; they fail the
 	// way an unknown option does.
 	missing map[string]bool
+	// stopped makes every read that needs the daemon fail the way it does
+	// when firewalld is not running.
+	stopped bool
 	calls   []string
 }
 
@@ -28,6 +31,9 @@ func (h *host) read(_ context.Context, args ...string) (string, error) {
 	h.mu.Lock()
 	h.calls = append(h.calls, key)
 	h.mu.Unlock()
+	if h.stopped {
+		return "Waiting on dbus connection...\nFirewallD is not running", errors.New("exit status 252")
+	}
 	if h.missing[key] {
 		return "usage: see firewall-cmd man page", errors.New("exit status 2")
 	}
@@ -133,7 +139,7 @@ var releases = []struct {
 	{"firewalld 2.4.4", "list-all-zones-firewalld244.txt", "get-active-zones-firewalld244.txt", "public"},
 }
 
-func TestLoadSnapshotIsOneWaveOfNineReads(t *testing.T) {
+func TestLoadSnapshotIsOneWaveOfEightReads(t *testing.T) {
 	for _, rel := range releases {
 		t.Run(rel.name, func(t *testing.T) {
 			h := newHost(t, rel.zones, rel.active, rel.defaultZone)
@@ -141,10 +147,10 @@ func TestLoadSnapshotIsOneWaveOfNineReads(t *testing.T) {
 			if !running {
 				t.Fatal("running = false")
 			}
-			if got := h.count(); got != 9 {
-				t.Errorf("reads = %d (%v), want 9", got, h.calls)
+			if got := h.count(); got != 8 {
+				t.Errorf("reads = %d (%v), want 8", got, h.calls)
 			}
-			for _, fallback := range []string{"--get-default-zone", "--get-active-zones", "--get-policies"} {
+			for _, fallback := range []string{"--state", "--get-default-zone", "--get-active-zones", "--get-policies"} {
 				if h.asked(fallback) {
 					t.Errorf("asked %s, which the listings already answer", fallback)
 				}
@@ -228,7 +234,7 @@ func TestLoadSnapshotWithoutPolicyObjects(t *testing.T) {
 
 func TestLoadSnapshotStopsWhenTheDaemonIsDown(t *testing.T) {
 	h := newHost(t, "list-all-zones.txt", "get-active-zones.txt", "FedoraWorkstation")
-	h.missing["--state"] = true
+	h.stopped = true
 	snapshot, running := loadSnapshot(context.Background(), h.read)
 	if running {
 		t.Fatal("running = true with --state failing")
@@ -236,9 +242,11 @@ func TestLoadSnapshotStopsWhenTheDaemonIsDown(t *testing.T) {
 	if !reflect.DeepEqual(snapshot, Snapshot{}) {
 		t.Errorf("snapshot = %+v, want empty", snapshot)
 	}
-	for _, fallback := range []string{"--get-default-zone", "--get-policies"} {
+	// Each read waits ~10 s for a stopped daemon, so nothing is asked after
+	// the wave: not --state, and none of the fallbacks.
+	for _, fallback := range []string{"--state", "--get-default-zone", "--get-policies"} {
 		if h.asked(fallback) {
-			t.Errorf("asked %s after --state failed", fallback)
+			t.Errorf("asked %s of a stopped daemon", fallback)
 		}
 	}
 }
@@ -320,4 +328,25 @@ func sameSet(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestLoadSnapshotAsksStateWhenTheZoneListingFails(t *testing.T) {
+	// The daemon is up but refused the zone listing: --state says so, and
+	// the rest of the picture is still shown.
+	h := newHost(t, "list-all-zones.txt", "get-active-zones.txt", "FedoraWorkstation")
+	h.missing["--list-all-zones"] = true
+	snapshot, running := loadSnapshot(context.Background(), h.read)
+	if !running || !h.asked("--state") {
+		t.Fatalf("running=%v asked --state=%v", running, h.asked("--state"))
+	}
+	if len(snapshot.Zones) != 0 || len(snapshot.PermanentZones) == 0 || len(snapshot.Services) == 0 {
+		t.Errorf("zones=%d permanent=%d services=%d", len(snapshot.Zones),
+			len(snapshot.PermanentZones), len(snapshot.Services))
+	}
+
+	// And a "not running" answer is still not running.
+	h.answers["--state"] = "not running"
+	if _, running := loadSnapshot(context.Background(), h.read); running {
+		t.Error("running = true with --state saying not running")
+	}
 }

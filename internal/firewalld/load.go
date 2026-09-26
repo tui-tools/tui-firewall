@@ -15,7 +15,6 @@ type readFunc func(ctx context.Context, args ...string) (string, error)
 // what a load costs is decided here: the list is kept to whole listings, and
 // none of them depends on the answer of another.
 var (
-	argsState             = []string{"--state"}
 	argsZones             = []string{"--list-all-zones"}
 	argsPermanentZones    = []string{"--permanent", "--list-all-zones"}
 	argsServices          = []string{"--get-services"}
@@ -27,10 +26,15 @@ var (
 
 	// The fallbacks, read only on a firewalld whose listings do not already
 	// carry the answer.
+	argsState       = []string{"--state"}
 	argsDefaultZone = []string{"--get-default-zone"}
 	argsActiveZones = []string{"--get-active-zones"}
 	argsPolicyNames = []string{"--get-policies"}
 )
+
+// notRunning is what every firewall-cmd that needs the daemon prints, with
+// exit code 252, when firewalld is stopped.
+const notRunning = "FirewallD is not running"
 
 // answer is one read's result.
 type answer struct {
@@ -72,11 +76,13 @@ func readAll(ctx context.Context, read readFunc, reads ...[]string) []answer {
 // is running. When it is not, the snapshot is empty: firewall-cmd cannot read
 // anything while the daemon is down.
 //
-// On a current firewalld (0.9 and later) this is one wave of nine reads, all
+// On a current firewalld (0.9 and later) this is one wave of eight reads, all
 // started together:
 //
-//   - `--state`, the only fatal one;
-//   - `--list-all-zones` and the same with `--permanent`. The runtime listing
+//   - `--list-all-zones` and the same with `--permanent`. The runtime zone
+//     listing is only answered by a running daemon (firewall-cmd exits 252
+//     "FirewallD is not running" otherwise), so its success stands in for
+//     `--state`, which is asked only when that listing fails. The runtime listing
 //     flags the default zone and the active ones in its headers
 //     ("public (default, active)"), computed by firewall-cmd from the same
 //     daemon calls `--get-default-zone` and `--get-active-zones` make, so
@@ -91,14 +97,25 @@ func readAll(ctx context.Context, read readFunc, reads ...[]string) []answer {
 // so the snapshot is the same either way.
 func loadSnapshot(ctx context.Context, read readFunc) (Snapshot, bool) {
 	wave := readAll(ctx, read,
-		argsState, argsZones, argsPermanentZones, argsServices, argsLogDenied,
+		argsZones, argsPermanentZones, argsServices, argsLogDenied,
 		argsPanic, argsLockdown, argsPolicies, argsPermanentPolicies)
-	state, zones, permanentZones, services, logDenied, panicMode, lockdown,
+	zones, permanentZones, services, logDenied, panicMode, lockdown,
 		policies, permanentPolicies := wave[0], wave[1], wave[2], wave[3],
-		wave[4], wave[5], wave[6], wave[7], wave[8]
+		wave[4], wave[5], wave[6], wave[7]
 
-	if state.err != nil || !strings.Contains(state.out, "running") {
-		return Snapshot{}, false
+	if zones.err != nil {
+		// A stopped daemon says so on the listing itself, after waiting
+		// for it on D-Bus for about ten seconds; asking --state as well
+		// would wait that long a second time.
+		if strings.Contains(zones.out, notRunning) {
+			return Snapshot{}, false
+		}
+		// Otherwise the daemon may be up and have refused this one read:
+		// only --state tells the two apart, and only the first is fatal.
+		state, err := read(ctx, argsState...)
+		if err != nil || strings.TrimSpace(state) != "running" {
+			return Snapshot{}, false
+		}
 	}
 
 	snapshot := Snapshot{Running: true}
