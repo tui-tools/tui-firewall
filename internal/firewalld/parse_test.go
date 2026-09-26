@@ -24,6 +24,12 @@ import (
 // verbatim from the lab's Fedora 44 guest running firewall-cmd 2.4.4. Holding
 // both ends is what turns "the format did not change between 2.3.2 and 2.4.4"
 // from an assumption into a test.
+//
+// list-all-policies.txt and permanent-list-all-policies.txt are the policy
+// listings of the same 2.3.2 machine, verbatim; the policy names are the ones
+// Fedora, libvirt and docker ship. On that release `--policy=X --list-all`
+// printed exactly the block the listing prints for X, which load_test.go
+// relies on to replay the older per-policy reads.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec // the name is a literal in the test above, and testdata is in the repository
