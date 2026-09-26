@@ -228,6 +228,27 @@ case "$backend" in
     check "the report names every backend it knows" \
       "sudo -n $bin --check | tr -d ' \\n'" \
       '"name":"ufw"'
+
+    # 8. The active zones come from the "(active)" flags of --list-all-zones
+    #    rather than from --get-active-zones of their own; they must still be
+    #    exactly the zones --get-active-zones lists.
+    fw_active=$(sudo -n firewall-cmd --get-active-zones | grep -v '^[[:space:]]' |
+      awk '{print $1}' | sort | tr '\n' ' ')
+    check "the active zones are the ones --get-active-zones lists (${fw_active% })" \
+      "sudo -n $bin --check | tr -d ' \\n' | grep -o '\"Name\":\"[^\"]*\",\"Title\":\"[^\"]*\",\"Description\":\"active' | sed 's/\"Name\":\"\\([^\"]*\\)\".*/\\1/' | sort | tr '\\n' ' '" \
+      "^${fw_active}\$"
+
+    # 9. --check is read on every reload by the sibling tools, so it has to
+    #    stay cheap: one wave of firewall-cmd reads started together, not one
+    #    process after another (it took about 8 s on this guest before).
+    #    The bar is looser than the ~1 s it takes, so a busy host does not fail
+    #    it, and far below the old cost, so a return to serial reads does.
+    start_ms=$(date +%s%3N)
+    sudo -n "$bin" --check >/dev/null 2>&1
+    check_ms=$(( $(date +%s%3N) - start_ms ))
+    check "--check answers in under 3 s (took ${check_ms} ms)" \
+      "test $check_ms -lt 3000 && echo fast" \
+      '^fast$'
     ;;
 
   iptables)

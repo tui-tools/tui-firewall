@@ -135,7 +135,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.1/tui-firewall_0.6.1_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.2/tui-firewall_0.6.2_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -724,10 +724,12 @@ are capped, so a firewall under a scan cannot grow it without bound.
 
 **firewalld**
 
-- Read `--state`, `--get-default-zone`, `--get-active-zones`,
-  `--list-all-zones` (runtime and permanent), `--get-services`,
-  `--get-log-denied`, `--query-panic`, `--query-lockdown` and the policy
-  objects from `--get-policies`.
+- Read `--state`, `--list-all-zones` and `--list-all-policies` (runtime and
+  permanent), `--get-services`, `--get-log-denied`, `--query-panic` and
+  `--query-lockdown`, all nine started together. The default zone and the
+  active zones come from the `(default, active)` flags of the zone listing; a
+  firewalld that prints no flags, or has no `--list-all-policies`, is asked
+  `--get-default-zone`, `--get-active-zones` and `--get-policies` instead.
 - One group per zone, default zone first, then the other active zones; policy
   objects follow as further groups.
 - Every entry kind, each marked runtime-only or permanent-only where they

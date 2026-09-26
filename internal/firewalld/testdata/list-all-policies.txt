@@ -1,0 +1,78 @@
+allow-host-ipv6 (active)
+  priority: -15000
+  target: CONTINUE
+  ingress-zones: ANY
+  egress-zones: HOST
+  services: 
+  ports: 
+  protocols: 
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+	rule family="ipv6" icmp-type name="mld-listener-done" accept
+	rule family="ipv6" icmp-type name="mld-listener-query" accept
+	rule family="ipv6" icmp-type name="mld-listener-report" accept
+	rule family="ipv6" icmp-type name="mld2-listener-report" accept
+	rule family="ipv6" icmp-type name="neighbour-advertisement" accept
+	rule family="ipv6" icmp-type name="neighbour-solicitation" accept
+	rule family="ipv6" icmp-type name="redirect" accept
+	rule family="ipv6" icmp-type name="router-advertisement" accept
+
+docker-forwarding (active)
+  priority: -1
+  target: ACCEPT
+  ingress-zones: ANY
+  egress-zones: docker
+  services: 
+  ports: 
+  protocols: 
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+
+libvirt-routed-in
+  priority: -1
+  target: ACCEPT
+  ingress-zones: ANY
+  egress-zones: libvirt-routed
+  services: 
+  ports: 
+  protocols: 
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+
+libvirt-routed-out
+  priority: -1
+  target: ACCEPT
+  ingress-zones: libvirt-routed
+  egress-zones: ANY
+  services: 
+  ports: 
+  protocols: 
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+
+libvirt-to-host
+  priority: -1
+  target: REJECT
+  ingress-zones: libvirt-routed
+  egress-zones: HOST
+  services: dhcp dhcpv6 dns ssh tftp
+  ports: 
+  protocols: icmp ipv6-icmp
+  masquerade: no
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 
+

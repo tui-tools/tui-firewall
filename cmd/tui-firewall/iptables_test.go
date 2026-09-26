@@ -136,7 +136,9 @@ func TestIptablesStagingAppliesThroughRestoreAndRollsBack(t *testing.T) {
 func TestIptablesCheckReportsTheBlock(t *testing.T) {
 	fake := iptables.NewFake()
 	var out bytes.Buffer
-	if err := runCheck(fake, compat.Result{}, backends.Inspect("demo"), "demo", &out); err != nil {
+	facts := make(chan checkFacts, 1)
+	facts <- checkFacts{compat: compat.Result{}, backends: backends.Inspect("demo"), selection: "demo"}
+	if err := runCheck(fake, facts, &out); err != nil {
 		t.Fatalf("runCheck: %v", err)
 	}
 	var report struct {
