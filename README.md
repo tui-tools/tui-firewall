@@ -270,7 +270,7 @@ What it costs is the backend's own reads, so it depends on the backend:
 | ufw | `ufw status verbose`, `ufw status numbered`, `ufw app list` | well under half a second |
 | nftables | `nft -j list ruleset` | well under half a second |
 | iptables | `iptables-save -c` and `ip6tables-save -c` | well under half a second |
-| firewalld | eight `firewall-cmd` reads started together, plus `firewall-cmd --version` | about 1 s on a 2-CPU Fedora 44 machine (firewalld 2.4.4) |
+| firewalld | eight `firewall-cmd` reads started together, plus `firewall-cmd --version` | about 1.7 s on a 2-vCPU Fedora 44 VM (firewalld 2.4.4), down from 8 s |
 
 firewalld is the slow one because every `firewall-cmd` is a Python
 interpreter that imports the firewalld client before it makes its D-Bus

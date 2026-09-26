@@ -241,7 +241,7 @@ case "$backend" in
     # 9. --check is read on every reload by the sibling tools, so it has to
     #    stay cheap: one wave of firewall-cmd reads started together, not one
     #    process after another (it took about 8 s on this guest before).
-    #    The bar is looser than the ~1 s it takes, so a busy host does not fail
+    #    The bar is looser than the ~1.7 s it takes, so a busy host does not fail
     #    it, and far below the old cost, so a return to serial reads does.
     #    EPOCHREALTIME rather than `date +%s%3N`, which the uutils date of
     #    newer distributions does not expand.
