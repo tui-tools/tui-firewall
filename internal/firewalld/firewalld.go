@@ -12,15 +12,23 @@
 // `firewall-cmd` costs a process per read and buys a preview the user can
 // copy, paste and run themselves, which is the whole point of the tool.
 //
+// A process per read is not free: every firewall-cmd is a Python interpreter
+// that imports the firewalld client before its D-Bus calls, several hundred
+// milliseconds on a small VM. So Load asks for whole listings rather than
+// piecemeal answers, and starts its reads together; see loadSnapshot.
+//
 // # The mapping
 //
 // firewalld is zone-based, and a zone holds several species of entry at once,
 // so it maps onto the generic model like this:
 //
 //   - Model.Groups: one firewall.Group per zone, from `--list-all-zones`,
-//     ordered default zone first, then the other active zones
-//     (`--get-active-zones`), then the rest. Policy objects
-//     (`--get-policies`) follow as further groups, named with PolicyPrefix.
+//     ordered default zone first, then the other active zones, then the
+//     rest. Which zone is the default and which are active comes from the
+//     "(default, active)" flags of that same listing (`--get-default-zone`
+//     and `--get-active-zones` only on a firewalld that does not print
+//     them). Policy objects (`--list-all-policies`) follow as further
+//     groups, named with PolicyPrefix.
 //   - Group.Default.Target: the zone target, exposed through the single
 //     policy slot firewall.PolicyTarget. firewalld has no global
 //     incoming/outgoing/routed policies, so those slots stay empty.
@@ -35,7 +43,8 @@
 //     an entry present in only one is marked "runtime only" or
 //     "permanent only".
 //   - Model.Services: `--get-services`.
-//   - Model.Enabled: `--state`. Model.Logging: `--get-log-denied`.
+//   - Model.Enabled: the daemon answered the runtime zone listing (or
+//     `--state`, when it did not). Model.Logging: `--get-log-denied`.
 //   - Model.Warning: panic mode, from `--query-panic`.
 //   - Mutations: the runtime command and the same command with `--permanent`,
 //     both shown in the confirm dialog. No reload, so no connection is
@@ -110,12 +119,13 @@ func (r *Real) Run(ctx context.Context, change firewall.Change) (string, error) 
 // Load reads the whole firewalld state: the daemon's own status, the runtime
 // and permanent zone listings, the policy objects and the global settings.
 //
-// Only `--state` is fatal. Everything else degrades: a firewalld too old for
+// Only a stopped daemon is fatal. Everything else degrades: a firewalld too old for
 // policy objects, or one that refuses a read, loses that part of the picture
-// rather than the whole screen.
+// rather than the whole screen. The reads themselves, and why they run
+// together rather than one after another, are described on loadSnapshot.
 func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
-	state, err := r.run.Read(ctx, Bin, "--state")
-	if err != nil || !strings.Contains(state, "running") {
+	snapshot, running := loadSnapshot(ctx, r.read)
+	if !running {
 		// firewall-cmd cannot read anything while the daemon is down, so
 		// there is no partial picture to show — only the reason.
 		return firewall.Model{
@@ -124,51 +134,14 @@ func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 				"`systemctl start firewalld` and press R",
 		}, nil
 	}
-
-	snapshot := Snapshot{Running: true}
-	snapshot.DefaultZone = firstLine(r.read(ctx, "--get-default-zone"))
-	snapshot.Active = ParseActiveZones(r.read(ctx, "--get-active-zones"))
-	snapshot.Zones = ParseSections(r.read(ctx, "--list-all-zones"))
-	snapshot.PermanentZones = ParseSections(r.read(ctx, "--permanent", "--list-all-zones"))
-	snapshot.Services = ParseList(r.read(ctx, "--get-services"))
-	snapshot.LogDenied = firstLine(r.read(ctx, "--get-log-denied"))
-	snapshot.Panic = strings.TrimSpace(r.read(ctx, "--query-panic")) == "yes"
-	// Lockdown was removed in firewalld 2.2, where --query-lockdown exits 0
-	// and prints a deprecation sentence instead of an answer. Reading the
-	// answer rather than the exit code is therefore the version-proof test:
-	// only a literal "yes" means the feature exists and is on.
-	snapshot.Lockdown = strings.TrimSpace(r.read(ctx, "--query-lockdown")) == "yes"
-	r.readPolicies(ctx, &snapshot)
-
 	return BuildModel(snapshot), nil
 }
 
-// read runs one read and swallows its failure: every caller above treats a
-// missing answer as an absent feature rather than a broken tool.
-func (r *Real) read(ctx context.Context, args ...string) string {
-	out, err := r.run.Read(ctx, append([]string{Bin}, args...)...)
-	if err != nil {
-		return ""
-	}
-	return out
-}
-
-// readPolicies fills in the policy objects, which firewalld grew in 0.9. On an
-// older daemon `--get-policies` simply fails and the snapshot keeps none.
-func (r *Real) readPolicies(ctx context.Context, snapshot *Snapshot) {
-	names := ParseList(r.read(ctx, "--get-policies"))
-	if len(names) > maxPolicies {
-		names = names[:maxPolicies]
-	}
-	for _, name := range names {
-		if err := checkAtom("policy", name); err != nil {
-			continue
-		}
-		snapshot.Policies = append(snapshot.Policies,
-			ParseSections(r.read(ctx, "--policy="+name, "--list-all"))...)
-		snapshot.PermanentPolicies = append(snapshot.PermanentPolicies,
-			ParseSections(r.read(ctx, "--permanent", "--policy="+name, "--list-all"))...)
-	}
+// read runs one firewall-cmd read. It is the only place the real backend
+// reaches the runner for a read, so loadSnapshot can be driven by a table of
+// captured outputs in the tests.
+func (r *Real) read(ctx context.Context, args ...string) (string, error) {
+	return r.run.Read(ctx, append([]string{Bin}, args...)...)
 }
 
 // firstLine trims a one-value answer.

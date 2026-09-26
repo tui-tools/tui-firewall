@@ -59,7 +59,8 @@ func noteForScope(scope string) string {
 // the generic model. Keeping the reads and the mapping apart is what lets the
 // mapping be tested against captured output with no firewalld anywhere near.
 type Snapshot struct {
-	// Running reports `firewall-cmd --state`.
+	// Running reports that the daemon answered: the runtime zone listing
+	// succeeded, or `firewall-cmd --state` said "running".
 	Running bool
 	// DefaultZone is `--get-default-zone`.
 	DefaultZone string

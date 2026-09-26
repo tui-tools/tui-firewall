@@ -201,14 +201,24 @@ func run(args []string) error {
 	// and never starts a terminal program. It is checked after the backend is
 	// built so that a machine with no usable firewall fails here with the same
 	// message the UI would have shown.
-	// The backend version is probed once, here, and used by both paths: the
-	// header shows it, --check reports it, and the smoke test records it.
-	backendCompat := probeCompat(context.Background(), backend.Name(), opts.demo.on)
-
+	// The backend version is probed once and used by both paths: the header
+	// shows it, --check reports it, and the smoke test records it.
 	if opts.check {
-		return runCheck(backend, backendCompat, backends.Inspect(backend.Name()),
-			selectionDetail(cfg, opts), os.Stdout)
+		// The version probe and the backend survey are separate processes
+		// that do not depend on the firewall read, so --check runs them while
+		// the backend loads instead of before it: sibling tools call --check
+		// on every reload, and its cost is what they wait for.
+		facts := make(chan checkFacts, 1)
+		go func() {
+			facts <- checkFacts{
+				compat:    probeCompat(context.Background(), backend.Name(), opts.demo.on),
+				backends:  backends.Inspect(backend.Name()),
+				selection: selectionDetail(cfg, opts),
+			}
+		}()
+		return runCheck(backend, facts, os.Stdout)
 	}
+	backendCompat := probeCompat(context.Background(), backend.Name(), opts.demo.on)
 
 	a := newApp(backend, theme.New(), backendCompat)
 	a.queueOpen(opts.open.ports, opts.comment)

@@ -364,6 +364,15 @@ func countDumpRules(d iptables.Dump) int {
 	return n
 }
 
+// checkFacts is what --check reports beside the model: the probed backend
+// version, what the detector saw of every backend, and why this one was
+// chosen. They are gathered while the backend loads; see run.
+type checkFacts struct {
+	compat    compat.Result
+	backends  []backends.State
+	selection string
+}
+
 // runCheck exercises the backend's real read path and prints the parsed model
 // as JSON. It returns an error when the backend cannot be read, which main
 // turns into a non-zero exit — so a caller can treat the exit code alone as
@@ -372,8 +381,7 @@ func countDumpRules(d iptables.Dump) int {
 // A backend that cannot be read fails here, and that is the correct result:
 // the exit code alone says whether this machine's firewall is legible to the
 // tool.
-func runCheck(backend firewall.Backend, backendCompat compat.Result,
-	states []backends.State, selection string, out io.Writer) error {
+func runCheck(backend firewall.Backend, facts <-chan checkFacts, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
 
@@ -381,6 +389,8 @@ func runCheck(backend firewall.Backend, backendCompat compat.Result,
 	if err != nil {
 		return fmt.Errorf("%s backend read failed: %w", backend.Name(), err)
 	}
+	survey := <-facts
+	backendCompat, states, selection := survey.compat, survey.backends, survey.selection
 
 	report := checkReport{
 		Tool:      toolName,
