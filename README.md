@@ -4,9 +4,11 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14368/badge)](https://www.bestpractices.dev/projects/14368)
 
 <!-- stability:start -->
-> **Beta.** The family is days old and still changing. Package names, flags
-> and keys may move without notice until 1.0. Pin versions, and report what
-> breaks.
+> **Stable since v1.0.0.** Keys, flags and the `--check` JSON follow semver:
+> anything new arrives in a minor release, and a removal or a change of meaning
+> waits for the next major, announced one minor before. What stable means: [the
+> family's
+> bar](https://github.com/tui-tools/tui-kit/blob/main/docs/stability.md).
 <!-- stability:end -->
 
 A terminal UI for the Linux firewall — **ufw**, **firewalld**, **iptables** and **nftables** —
@@ -25,9 +27,8 @@ sets as aliases.
 
 ![Rules table](docs/screenshots/tui-firewall-main.png)
 
-> **Status: early, under validation.** An independent tool that follows the
-> Omarchy visual style; it is **not** part of the Omarchy project and not
-> endorsed by its maintainers. Expect rough edges.
+> An independent tool that follows the Omarchy visual style; it is **not** part
+> of the Omarchy project and not endorsed by its maintainers.
 
 ## Install
 
@@ -135,7 +136,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v0.6.2/tui-firewall_0.6.2_linux_amd64.tar.gz | tar -xz tui-firewall
+curl -fsSL https://github.com/tui-tools/tui-firewall/releases/download/v1.0.0/tui-firewall_1.0.0_linux_amd64.tar.gz | tar -xz tui-firewall
 sudo install -m0755 tui-firewall /usr/local/bin/tui-firewall
 ```
 
@@ -211,6 +212,58 @@ rules use as aliases.
 `y` runs the command shown, `n` does not. There is no other path to a change:
 the UI hands the same value to the preview and to the runner, so what you read
 is what executes.
+
+## Stability
+
+tui-firewall is stable since 1.0.0 and follows [semver](https://semver.org).
+What is frozen is the contract a script or a habit can depend on:
+
+- the keys: every key the help screen (`?`) and [Keys](#keys) list, on every
+  backend, and in the add rule form (`tab`, `shift+tab`, `←`/`→`, `enter`,
+  `esc`);
+- the flags: `--backend`, `--check`, `--comment`, `--demo` (with
+  `--demo=firewalld`, `--demo=iptables` and `--demo=nftables`), `--open`,
+  `--report`, `--sudo`, `--theme` and `--version`, and the `TUI_FIREWALL_*`
+  configuration keys (`backend`, `sudo`, `theme`);
+- the `--check` JSON: every field name and what it means. At the top level:
+  `tool`, `version`, `backend`, `describe`, `enabled`, `logging`, the counts
+  (`groups`, `rules`), `compat`, `selection`, `backends`, `nftables`,
+  `iptables` and `model`. Each `backends` row: `name`, `installed`, `active`,
+  `enabled`, `selected`. `compat`: `backend`, `version`, `minimum`, `status`,
+  and `notes` and `detail` when there are any. `nftables`: `nftVersion`,
+  `schemaVersion`, `tables`, `chains`, `baseChains`, `sets`, `natRules`,
+  `ownTable`, `ownTablePresent`, `manager`, `readOnly`, `writable`, `staging`
+  (`supported`, `active`, `pending`, `timeoutSeconds`) and `logging`
+  (`loggedRules`, `loggedRulesTotal`, `liveSource`, `liveReadable`,
+  `liveDetail`, `prefix`). `iptables`: `version`, `variant`, `hasV6`,
+  `tablesV4`, `tablesV6`, `rulesV4`, `rulesV6`, `warnings`, `writable`,
+  `placement`, `openInput`, `shadowedInput`, `inputEnd`, `inputRules`,
+  `persistence` (`kind`, `v4Path`, `v6Path`, `enabled`, `drift`,
+  `driftKnown`, `inSync`, `runtimeOnly`, `savedOnly`, `reordered`,
+  `readError`) and `staging`. `model`: `Backend`, `Enabled`, `Logging`,
+  `LoggingOn`, `Warning`, `Groups`, `Services`; each group: `Name`, `Title`,
+  `Description`, `View`, `Default` (`Incoming`, `Outgoing`, `Routed`,
+  `RoutedDisabled`, `Target`), `PolicySlots`, `Rules`; each rule: `ID`,
+  `Index`, `Kind`, `Note`, `Action`, `Direction`, `Proto`, `Ports`, `From`,
+  `To`, `Service`, `Comment`, `Family`. The `nftables` and `iptables` blocks
+  are there only for their backend, and a field that is left out when empty
+  is left out on purpose, and that is part of its meaning.
+
+Unlike the other stable tools of the family, `model` is part of the contract
+here: the rules are what a firewall script asks about, and they live there.
+Not part of the contract: a rule's `Raw` and `Extra`. They carry the
+backend's own text and its per-backend details, there for bug reports, and
+they may change in any release, minor or patch. A rule's `ID` is the
+backend's own handle, rule number or specification; its meaning is frozen,
+its format belongs to the backend.
+
+A minor release only adds: new keys, new flags, new `--check` fields. Removing
+or renaming one, or changing what it means, happens only in a major release,
+and the minor release before that major warns about it, on screen and in
+`--check`. The commands a key previews may gain a safer flag or a check in a
+minor release; what they change on the machine does not. The bar a tool in the
+family meets to be called stable is in [tui-kit's stability
+page](https://github.com/tui-tools/tui-kit/blob/main/docs/stability.md).
 
 ## Usage
 
@@ -729,7 +782,7 @@ are capped, so a firewall under a scan cannot grow it without bound.
 
 ![The live firewall log](docs/screenshots/tui-firewall-nftables-live.png)
 
-## What v0.1 can do
+## What it can do
 
 **Every backend**
 
@@ -821,7 +874,7 @@ are capped, so a firewall under a scan cannot grow it without bound.
   prefix — read from journald and filtered to the tool's own rules, pausable and
   bounded so it never grows without limit.
 
-## What v0.1 cannot do
+## What it cannot do
 
 - **No rule editing on ufw or firewalld.** Change a rule by deleting it and
   adding the new one; only the nftables backend edits in place with `E`.
