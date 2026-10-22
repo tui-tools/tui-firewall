@@ -91,28 +91,56 @@
       "action": "Add a rule"
     },
     {
-      "key": "d",
-      "action": "Delete the selected rule"
+      "key": "E",
+      "action": "Edit the selected rule in place, keeping its handle and position (nftables)"
+    },
+    {
+      "key": "K / J",
+      "action": "Move the selected rule up / down, as one atomic transaction (nftables)"
     },
     {
       "key": "D",
       "action": "Disable or enable the selected rule, keeping its spec and position (nftables)"
     },
     {
+      "key": "d",
+      "action": "Delete the selected rule"
+    },
+    {
       "key": "e",
       "action": "Enable or disable the firewall (ufw)"
     },
     {
+      "key": "r",
+      "action": "Reload the firewall"
+    },
+    {
       "key": "p",
-      "action": "Change a default policy, or a firewalld zone target"
+      "action": "Change a default policy, a firewalld zone target or a chain policy"
     },
     {
       "key": "L",
       "action": "Change the logging level, or the firewalld log-denied value"
     },
     {
-      "key": "r",
-      "action": "Reload the firewall"
+      "key": "l",
+      "action": "Toggle logging on the selected rule (nftables)"
+    },
+    {
+      "key": "w",
+      "action": "Watch the live firewall log of the logged rules (nftables)"
+    },
+    {
+      "key": "s",
+      "action": "Toggle staging: collect changes instead of applying them (nftables, iptables)"
+    },
+    {
+      "key": "S",
+      "action": "Review and apply the staged changes as one atomic transaction"
+    },
+    {
+      "key": "k",
+      "action": "Keep an applied batch before its rollback timer fires"
     },
     {
       "key": "W",

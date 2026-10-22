@@ -399,7 +399,11 @@ firewall nor `sudo` is available, it says so and points at `--demo`.
 | `w` | Watch the live firewall log of the logged rules (nftables) |
 | `W` | Save the tool's own table to a file loaded on boot, with a diff preview (nftables) |
 | `W` | Persist the running rules to the files restored at boot, with a diff preview (iptables) |
+| `s` | Toggle staging: collect changes instead of applying them (nftables, iptables) |
+| `S` | Review and apply the staged changes as one atomic transaction |
+| `k` | Keep an applied batch before its rollback timer fires |
 | `x` | Actions this backend offers beyond these keys |
+| `v` | Pick a group: a firewalld zone, an nftables or iptables chain, NAT, aliases |
 | `[` / `]` | Previous / next group — the firewalld zones and policy objects |
 | `R` | Re-read the firewall |
 | `?` | Help |
