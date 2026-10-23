@@ -27,6 +27,8 @@ const installHint = "install it (apt install ufw / pacman -S ufw), " +
 // translation between ufw's output and the backend-agnostic model.
 type Real struct {
 	run *runner.Runner
+	// files are where the settings of an inactive firewall are read from.
+	files hostFiles
 }
 
 // Available reports whether ufw is installed on this host.
@@ -46,7 +48,7 @@ func NewReal(sudoPrefix []string) (*Real, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Real{run: r}, nil
+	return &Real{run: r, files: systemFiles}, nil
 }
 
 // Name identifies the backend.
@@ -75,12 +77,54 @@ func (r *Real) Load(ctx context.Context) (firewall.Model, error) {
 		return firewall.Model{}, err
 	}
 	model := MergeModels(ParseStatus(verboseOut), ParseStatus(numberedOut))
+	if !model.Enabled {
+		model = r.withInactiveState(ctx, model)
+	}
 	// A missing app profile list is not fatal: the rule form simply offers no
 	// profile picker.
 	if appsOut, appErr := r.run.Read(ctx, "ufw", "app", "list"); appErr == nil {
 		model.Services = ParseAppList(appsOut)
 	}
 	return model, nil
+}
+
+// withInactiveState fills in what `ufw status` does not print while ufw is
+// inactive: it then says "Status: inactive" and nothing else, which would show
+// a firewall with no rules and unknown policies when rules are saved and will
+// apply on the next `ufw enable`. The saved rules come from `ufw show added`
+// and are marked inactive; the policies and logging level come from ufw's own
+// configuration files. A read that fails leaves that part as it was.
+func (r *Real) withInactiveState(ctx context.Context, model firewall.Model) firewall.Model {
+	return applyInactiveState(model, r.readAdded(ctx), readSettings(r.files))
+}
+
+// readAdded runs `ufw show added`; an error reads as no saved rules.
+func (r *Real) readAdded(ctx context.Context) string {
+	out, err := r.run.Read(ctx, "ufw", "show", "added")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// applyInactiveState merges the saved rules and the configured settings into
+// the model of an inactive firewall. Anything `ufw status` did report wins.
+func applyInactiveState(model firewall.Model, addedOut string, s settings) firewall.Model {
+	if len(model.Groups) == 0 {
+		return model
+	}
+	group := &model.Groups[0]
+	if len(group.Rules) == 0 {
+		group.Rules = ParseAdded(addedOut)
+	}
+	if group.Default.Incoming == "" && group.Default.Outgoing == "" &&
+		group.Default.Routed == "" && !group.Default.RoutedDisabled {
+		group.Default = s.defaults
+	}
+	if model.Logging == "" {
+		model.Logging, model.LoggingOn = s.logging, s.loggingOn
+	}
+	return model
 }
 
 // Run executes a previewed change.

@@ -108,8 +108,10 @@ func disabledRow(rule firewall.Rule) bool {
 // enforced, and nothing on one that is. The eye should be drawn only to the
 // rows that are switched off.
 func disabledTag(rule firewall.Rule) string {
+	// The backend names the state: nftables holds a rule "disabled", ufw
+	// keeps every rule "inactive" while the firewall itself is off.
 	if disabledRow(rule) {
-		return nftables.DisabledMarker
+		return rule.Extra[firewall.ExtraDisabled]
 	}
 	return ""
 }

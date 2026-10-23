@@ -143,8 +143,16 @@ case "$backend" in
 
     # 3. The rule count matches what ufw lists. This is the real parser test:
     #    a tool that fetched the output but failed to parse it reports zero.
-    ufw_rules=$(sudo -n ufw status numbered | grep -cE '^\[[ 0-9]+\]')
-    check "rule count matches \`ufw status numbered\` ($ufw_rules)" \
+    #    An inactive ufw numbers nothing; its saved rules are what
+    #    `ufw show added` lists, one line per rule.
+    if [ "$ufw_enabled" = true ]; then
+      ufw_rules=$(sudo -n ufw status numbered | grep -cE '^\[[ 0-9]+\]')
+      ufw_source="ufw status numbered"
+    else
+      ufw_rules=$(sudo -n ufw show added | grep -c '^ufw ' || true)
+      ufw_source="ufw show added"
+    fi
+    check "rule count matches \`$ufw_source\` ($ufw_rules)" \
       "sudo -n $bin --check" \
       "\"rules\": $ufw_rules"
 
