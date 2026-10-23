@@ -104,6 +104,10 @@ func (a *app) headerView() string {
 	style := t.Danger
 	if a.model.Enabled {
 		enabled, style = "enabled", t.OK
+	} else if group, ok := a.model.Group(a.group); ok && anyRule(group.Rules, disabledRow) {
+		// An inactive ufw still lists the rules it has saved: say they are
+		// what the firewall will apply, not what it is applying.
+		enabled = "disabled, rules apply once enabled"
 	}
 
 	facts := []ui.Fact{{Label: "status", Value: enabled, Style: &style}}

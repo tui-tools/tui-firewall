@@ -155,15 +155,52 @@ func BuildDeleteRule(group string, rule firewall.Rule) (firewall.Change, error) 
 	if err := checkGroup(group); err != nil {
 		return firewall.Change{}, err
 	}
+	// A rule listed while ufw is inactive has no number: it is deleted by its
+	// own text, which removes both of its halves at once.
+	if rule.Extra[firewall.ExtraDisabled] == InactiveMarker {
+		args, err := deleteByRuleArgs(rule.ID)
+		if err != nil {
+			return firewall.Change{}, err
+		}
+		change := firewall.One(firewall.Command{
+			Argv:        args,
+			Description: "Delete rule",
+			Destructive: true,
+		})
+		change.Note = "ufw is inactive, so the rule is deleted by its text from the " +
+			"saved rules, IPv4 and IPv6 halves together"
+		return change, nil
+	}
 	number, err := strconv.Atoi(rule.ID)
 	if err != nil || number <= 0 {
 		return firewall.Change{}, fmt.Errorf("ufw: rule has no usable number (%q)", rule.ID)
 	}
-	return firewall.One(firewall.Command{
+	// `ufw delete NUM` removes one entry of `ufw status numbered`, and a rule
+	// for both families is two entries there. The dialog says which half this
+	// one is, so two deletes in a row are not two identical dialogs.
+	description := fmt.Sprintf("Delete rule %d", number)
+	note := ""
+	switch rule.Extra[ExtraHalf] {
+	case HalfIPv4:
+		description += " (IPv4 half)"
+		note = "Only the IPv4 half: the IPv6 half (v6) is a separate rule and stays " +
+			"until it is deleted too"
+	case HalfIPv6:
+		description += " (IPv6 half)"
+		note = "Only the IPv6 half: the IPv4 half is a separate rule and stays " +
+			"until it is deleted too"
+	default:
+		if rule.Family == firewall.FamilyIPv6 {
+			description += " (IPv6)"
+		}
+	}
+	change := firewall.One(firewall.Command{
 		Argv:        []string{"ufw", "--force", "delete", strconv.Itoa(number)},
-		Description: fmt.Sprintf("Delete rule %d", number),
+		Description: description,
 		Destructive: true,
-	}), nil
+	})
+	change.Note = note
+	return change, nil
 }
 
 // BuildSetEnabled turns the firewall on or off. `--force` skips ufw's own SSH

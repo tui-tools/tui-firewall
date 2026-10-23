@@ -796,8 +796,19 @@ are capped, so a firewall under a scan cannot grow it without bound.
 **ufw**
 
 - Read `ufw status verbose`, `ufw status numbered` and `ufw app list`.
+- While ufw is inactive, `ufw status` prints only `Status: inactive`. The rules
+  then come from `ufw show added`, and the default policies and logging level
+  from `/etc/default/ufw` and `/etc/ufw/ufw.conf`, so the screen shows what
+  `ufw enable` will apply: each rule is marked `inactive`, and the status reads
+  `disabled, rules apply once enabled`. ufw numbers nothing while inactive, so
+  such a rule is deleted by its text (`ufw delete allow 8080/tcp`), which
+  removes its IPv4 and IPv6 halves together.
 - Default policies for incoming, outgoing and routed traffic; `route` rules and
   IPv6 rules included.
+- A rule for both address families is two entries in `ufw status numbered`,
+  deleted one at a time; the delete dialog names the half it removes
+  (`Delete rule 4 (IPv4 half)`, then `Delete rule 6 (IPv6)` for the twin once
+  the list is renumbered).
 - Add a rule with an action (allow/deny/reject/limit), a direction, a port,
   port list or range, a protocol, an app profile, source and destination CIDR,
   a comment, and insertion at a given position.

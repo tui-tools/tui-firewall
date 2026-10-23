@@ -126,6 +126,9 @@ func MergeModels(verbose, numbered firewall.Model) firewall.Model {
 		len(merged.Groups) > 0 {
 		merged.Groups[0].Rules = numbered.Groups[0].Rules
 	}
+	if len(merged.Groups) > 0 {
+		merged.Groups[0].Rules = markHalves(merged.Groups[0].Rules)
+	}
 	return merged
 }
 

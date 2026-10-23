@@ -107,7 +107,8 @@ func (f *Fake) snapshot() firewall.Model {
 	m := f.model
 	m.Groups = append([]firewall.Group(nil), f.model.Groups...)
 	for i := range m.Groups {
-		m.Groups[i].Rules = append([]firewall.Rule(nil), f.model.Groups[i].Rules...)
+		// markHalves copies the slice and every Extra map it touches.
+		m.Groups[i].Rules = markHalves(f.model.Groups[i].Rules)
 	}
 	m.Services = append([]string(nil), f.model.Services...)
 	return m
